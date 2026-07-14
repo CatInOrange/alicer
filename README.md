@@ -28,3 +28,13 @@ Required GitHub repository secrets:
 
 The local `android/key.properties` and `android/upload-keystore.p12` files are
 ignored by git and should not be committed.
+
+After GitHub CLI is authenticated, configure repository secrets with:
+
+```bash
+export COS_BUCKET=...
+export COS_REGION=...
+export COS_SECRET_ID=...
+export COS_SECRET_KEY=...
+./scripts/configure_github_secrets.sh fakecat/alicer
+```
