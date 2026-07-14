@@ -27,7 +27,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _apiBaseController = TextEditingController();
   final _companionNameController = TextEditingController();
   final _userNameController = TextEditingController();
-  final _modelController = TextEditingController();
   final _maxTokensController = TextEditingController();
 
   AlicerSettings _settings = const AlicerSettings();
@@ -47,7 +46,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _apiBaseController.dispose();
     _companionNameController.dispose();
     _userNameController.dispose();
-    _modelController.dispose();
     _maxTokensController.dispose();
     super.dispose();
   }
@@ -65,7 +63,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _apiBaseController.text = settings.apiBaseUrl;
     _companionNameController.text = settings.companion.name;
     _userNameController.text = settings.companion.userName;
-    _modelController.text = settings.model.model;
     _maxTokensController.text = settings.model.maxTokens.toString();
   }
 
@@ -301,9 +298,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     decoration: const InputDecoration(labelText: '后端地址'),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: _modelController,
-                    decoration: const InputDecoration(labelText: 'DeepSeek 模型'),
+                  _ModelSelector(
+                    value: _settings.model.model,
+                    onChanged: _setModel,
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -371,13 +368,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ? '你'
                 : _userNameController.text.trim(),
       ),
-      model: _settings.model.copyWith(
-        model:
-            _modelController.text.trim().isEmpty
-                ? 'deepseek-chat'
-                : _modelController.text.trim(),
-        maxTokens: maxTokens,
-      ),
+      model: _settings.model.copyWith(maxTokens: maxTokens),
     );
     setState(() {
       _isSaving = true;
@@ -421,6 +412,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _setMemory(MemoryToggles memory) {
     setState(() => _settings = _settings.copyWith(memory: memory));
+    unawaited(SettingsStore.save(_settings));
+  }
+
+  void _setModel(String model) {
+    final option = deepSeekModelOptionFor(model);
+    setState(() {
+      _settings = _settings.copyWith(
+        model: _settings.model.copyWith(
+          model: option.id,
+          maxTokens: option.maxTokens,
+        ),
+      );
+      _maxTokensController.text = option.maxTokens.toString();
+    });
     unawaited(SettingsStore.save(_settings));
   }
 
@@ -657,6 +662,75 @@ class _SettingsHero extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ModelSelector extends StatelessWidget {
+  const _ModelSelector({required this.value, required this.onChanged});
+
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = normalizeDeepSeekModelId(value);
+    return InputDecorator(
+      decoration: const InputDecoration(labelText: 'DeepSeek 模型'),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: selected,
+          isExpanded: true,
+          borderRadius: BorderRadius.circular(8),
+          items: [
+            for (final item in deepSeekModelOptions)
+              DropdownMenuItem<String>(
+                value: item.id,
+                child: _ModelOptionLabel(option: item),
+              ),
+          ],
+          selectedItemBuilder: (context) {
+            return [
+              for (final item in deepSeekModelOptions)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    item.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ];
+          },
+          onChanged: (next) {
+            if (next != null) onChanged(next);
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _ModelOptionLabel extends StatelessWidget {
+  const _ModelOptionLabel({required this.option});
+
+  final DeepSeekModelOption option;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(option.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        const SizedBox(height: 2),
+        Text(
+          option.description,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
     );
   }
 }

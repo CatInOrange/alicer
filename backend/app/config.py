@@ -23,7 +23,8 @@ class Settings(BaseModel):
     ]
     deepseek_api_key: str = os.environ.get("DEEPSEEK_API_KEY", "")
     deepseek_base_url: str = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    deepseek_model: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+    deepseek_model: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    amap_key: str = os.environ.get("AMAP_KEY", "")
     request_timeout_seconds: float = float(os.environ.get("ALICER_REQUEST_TIMEOUT_SECONDS", "60"))
 
 

@@ -188,7 +188,7 @@ class MemoryToggles {
 class ModelSettings {
   const ModelSettings({
     this.provider = 'deepseek',
-    this.model = 'deepseek-chat',
+    this.model = defaultDeepSeekModelId,
     this.temperature = 0.8,
     this.maxTokens = 1200,
   });
@@ -199,9 +199,10 @@ class ModelSettings {
   final int maxTokens;
 
   factory ModelSettings.fromJson(Map<String, dynamic> json) {
+    final rawModel = (json['model'] ?? defaultDeepSeekModelId).toString();
     return ModelSettings(
       provider: (json['provider'] ?? 'deepseek').toString(),
-      model: (json['model'] ?? 'deepseek-chat').toString(),
+      model: normalizeDeepSeekModelId(rawModel),
       temperature: (json['temperature'] as num?)?.toDouble() ?? 0.8,
       maxTokens: (json['maxTokens'] as num?)?.toInt() ?? 1200,
     );
@@ -217,11 +218,57 @@ class ModelSettings {
   ModelSettings copyWith({String? model, double? temperature, int? maxTokens}) {
     return ModelSettings(
       provider: provider,
-      model: model ?? this.model,
+      model: model == null ? this.model : normalizeDeepSeekModelId(model),
       temperature: temperature ?? this.temperature,
       maxTokens: maxTokens ?? this.maxTokens,
     );
   }
+}
+
+class DeepSeekModelOption {
+  const DeepSeekModelOption({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.maxTokens,
+  });
+
+  final String id;
+  final String name;
+  final String description;
+  final int maxTokens;
+}
+
+const defaultDeepSeekModelId = 'deepseek-v4-flash';
+
+const deepSeekModelOptions = <DeepSeekModelOption>[
+  DeepSeekModelOption(
+    id: 'deepseek-v4-flash',
+    name: 'DeepSeek V4 Flash',
+    description: '速度优先，适合日常陪伴聊天。',
+    maxTokens: 8192,
+  ),
+  DeepSeekModelOption(
+    id: 'deepseek-v4-pro',
+    name: 'DeepSeek V4 Pro',
+    description: '能力优先，适合复杂表达、长上下文和高质量回复。',
+    maxTokens: 8192,
+  ),
+];
+
+String normalizeDeepSeekModelId(String value) {
+  final model = value.trim();
+  if (model == 'deepseek-chat' || model == 'deepseek-reasoner') {
+    return defaultDeepSeekModelId;
+  }
+  return deepSeekModelOptions.any((item) => item.id == model)
+      ? model
+      : defaultDeepSeekModelId;
+}
+
+DeepSeekModelOption deepSeekModelOptionFor(String value) {
+  final model = normalizeDeepSeekModelId(value);
+  return deepSeekModelOptions.firstWhere((item) => item.id == model);
 }
 
 class AlicerSettings {

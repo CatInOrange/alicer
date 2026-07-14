@@ -80,7 +80,7 @@ DEFAULT_SETTINGS: dict = {
     },
     "model": {
         "provider": "deepseek",
-        "model": "deepseek-chat",
+        "model": "deepseek-v4-flash",
         "temperature": 0.8,
         "maxTokens": 1200,
     },

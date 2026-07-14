@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import httpx
 
+from ..config import get_settings
+
 
 WEATHER_CODES = {
     0: "晴",
@@ -23,7 +25,10 @@ WEATHER_CODES = {
 
 async def enrich_weather(environment: dict | None) -> dict:
     env = dict(environment or {})
-    if env.get("weather") or env.get("latitude") is None or env.get("longitude") is None:
+    if env.get("latitude") is None or env.get("longitude") is None:
+        return env
+    await _enrich_location_name(env)
+    if env.get("weather"):
         return env
     try:
         params = {
@@ -44,3 +49,38 @@ async def enrich_weather(environment: dict | None) -> dict:
     except Exception:
         env["weather"] = {"summary": "天气暂时获取失败"}
     return env
+
+
+async def _enrich_location_name(env: dict) -> None:
+    if str(env.get("locationName") or "").strip():
+        return
+    settings = get_settings()
+    if not settings.amap_key:
+        return
+    try:
+        params = {
+            "key": settings.amap_key,
+            "location": f"{env['longitude']},{env['latitude']}",
+            "extensions": "base",
+            "roadlevel": 0,
+        }
+        async with httpx.AsyncClient(timeout=6) as client:
+            response = await client.get("https://restapi.amap.com/v3/geocode/regeo", params=params)
+            response.raise_for_status()
+            data = response.json()
+        if str(data.get("status")) != "1":
+            return
+        regeocode = data.get("regeocode") or {}
+        address = str(regeocode.get("formatted_address") or "").strip()
+        component = regeocode.get("addressComponent") or {}
+        city = component.get("city")
+        if isinstance(city, list):
+            city = ""
+        district = str(component.get("district") or "").strip()
+        township = str(component.get("township") or "").strip()
+        short_parts = [str(item).strip() for item in (city, district, township) if str(item).strip()]
+        env["locationName"] = " · ".join(short_parts) or address
+        if address:
+            env["locationAddress"] = address
+    except Exception:
+        return
