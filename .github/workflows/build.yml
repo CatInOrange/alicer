@@ -1,0 +1,224 @@
+name: Build and Upload APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    if: ${{ github.event_name == 'workflow_dispatch' || (!contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[skip android]')) }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.29.3'
+          channel: 'stable'
+
+      - name: Restore Android signing files
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ALICER_UPLOAD_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ALICER_UPLOAD_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALICER_UPLOAD_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ALICER_UPLOAD_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_BASE64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASSWORD"
+          echo "$KEYSTORE_BASE64" | base64 -d > android/upload-keystore.p12
+          cat > android/key.properties <<EOF
+          storeFile=upload-keystore.p12
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Prepare build version
+        run: |
+          BUILD_TIME=$(TZ=Asia/Shanghai date +%Y%m%d%H%M)
+          BUILD_NUMBER=$(TZ=Asia/Shanghai date +%y%j%H%M)
+          BASE_VERSION=$(python3 - << 'EOF'
+          from pathlib import Path
+          for line in Path('pubspec.yaml').read_text(encoding='utf-8').splitlines():
+              if line.startswith('version:'):
+                  print(line.split(':', 1)[1].strip().split('+', 1)[0])
+                  break
+          EOF
+          )
+          VERSION_NAME="${BASE_VERSION}-${BUILD_TIME}"
+          {
+            echo "BUILD_TIME=$BUILD_TIME"
+            echo "BUILD_NUMBER=$BUILD_NUMBER"
+            echo "VERSION_NAME=$VERSION_NAME"
+          } >> "$GITHUB_ENV"
+          echo "Version: $VERSION_NAME+$BUILD_NUMBER"
+
+      - name: Cache Flutter pub
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: flutter-pub-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: |
+            flutter-pub-
+
+      - name: Cache NDK
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/android/sdk/ndk
+          key: ndk-27.0.12077973
+
+      - name: Cache CMake
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/android/sdk/cmake
+          key: cmake-3.22.1
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/android/*.gradle*', '**/android/app/build.gradle*') }}
+          restore-keys: |
+            gradle-
+
+      - name: Cache Flutter build artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.flutter-devtools
+          key: flutter-artifacts-${{ runner.os }}
+
+      - name: Build release APK
+        run: flutter build apk --release --build-name "$VERSION_NAME" --build-number "$BUILD_NUMBER"
+
+      - name: Compress APK
+        run: |
+          cd build/app/outputs/flutter-apk
+          zip app-release.apk.zip app-release.apk
+          echo "Compressed size: $(du -h app-release.apk.zip | cut -f1)"
+
+      - name: Prepare update manifest
+        env:
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_REGION: ${{ secrets.COS_REGION }}
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          python3 << 'EOF'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          apk_zip = Path('build/app/outputs/flutter-apk/app-release.apk.zip')
+          digest = hashlib.sha256(apk_zip.read_bytes()).hexdigest()
+          bucket = os.environ['COS_BUCKET']
+          region = os.environ['COS_REGION']
+          version_path = f'alicer/apk/releases/{os.environ["BUILD_TIME"]}/app-release.apk.zip'
+          manifest = {
+              'schema': 1,
+              'appId': 'alicer',
+              'platform': 'android',
+              'versionName': os.environ['VERSION_NAME'],
+              'buildNumber': int(os.environ['BUILD_NUMBER']),
+              'buildTime': os.environ['BUILD_TIME'],
+              'apkZipUrl': f'https://{bucket}.cos.{region}.myqcloud.com/{version_path}',
+              'latestApkZipUrl': f'https://{bucket}.cos.{region}.myqcloud.com/alicer/apk/app-release.apk.zip',
+              'sha256': digest,
+              'size': apk_zip.stat().st_size,
+              'releaseNotes': os.environ.get('HEAD_COMMIT_MESSAGE') or '',
+              'commit': os.environ.get('GITHUB_SHA', ''),
+              'publishedAt': os.environ['BUILD_TIME'],
+          }
+          Path('build/app/outputs/flutter-apk/latest.json').write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2),
+              encoding='utf-8',
+          )
+          print(json.dumps(manifest, ensure_ascii=False, indent=2))
+          EOF
+
+      - name: Setup COS CLI
+        run: pip install cos-python-sdk-v5
+
+      - name: Upload to Tencent COS
+        env:
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_REGION: ${{ secrets.COS_REGION }}
+        run: |
+          python3 << 'EOF'
+          import logging
+          import os
+          import time
+          from qcloud_cos import CosConfig, CosS3Client
+          from qcloud_cos.cos_exception import CosClientError, CosServiceError
+
+          logging.basicConfig(level=logging.INFO, stream=__import__('sys').stdout)
+          logger = logging.getLogger()
+
+          client = CosS3Client(CosConfig(
+              Region=os.environ['COS_REGION'],
+              SecretId=os.environ['COS_SECRET_ID'],
+              SecretKey=os.environ['COS_SECRET_KEY'],
+              Token=None,
+              Scheme='https',
+              Timeout=600,
+          ))
+
+          files = [
+              ('build/app/outputs/flutter-apk/app-release.apk.zip', 'alicer/apk/app-release.apk.zip'),
+              ('build/app/outputs/flutter-apk/app-release.apk.zip', f'alicer/apk/releases/{os.environ["BUILD_TIME"]}/app-release.apk.zip'),
+              ('build/app/outputs/flutter-apk/latest.json', 'alicer/apk/latest.json'),
+          ]
+
+          def upload_with_retry(local_file, cos_path, max_retries=3):
+              for attempt in range(max_retries):
+                  try:
+                      logger.info(f'Upload attempt {attempt + 1}/{max_retries}')
+                      logger.info(f'Uploading {local_file} to cos://{os.environ["COS_BUCKET"]}/{cos_path}')
+                      client.upload_file(
+                          Bucket=os.environ['COS_BUCKET'],
+                          LocalFilePath=local_file,
+                          Key=cos_path,
+                          PartSize=20,
+                          MAXThread=20,
+                      )
+                      client.put_object_acl(
+                          Bucket=os.environ['COS_BUCKET'],
+                          Key=cos_path,
+                          ACL='public-read',
+                      )
+                      logger.info('Upload complete!')
+                      return True
+                  except (CosClientError, CosServiceError, Exception) as error:
+                      logger.warning(f'Attempt {attempt + 1} failed: {error}')
+                      if attempt < max_retries - 1:
+                          time.sleep((attempt + 1) * 30)
+              return False
+
+          success = True
+          for local_file, cos_path in files:
+              success = upload_with_retry(local_file, cos_path) and success
+
+          if success:
+              print(f'Latest manifest: https://{os.environ["COS_BUCKET"]}.cos.{os.environ["COS_REGION"]}.myqcloud.com/alicer/apk/latest.json')
+          else:
+              logger.error('Upload failed after all retries')
+              exit(1)
+          EOF
