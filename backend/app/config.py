@@ -24,6 +24,10 @@ class Settings(BaseModel):
     deepseek_api_key: str = os.environ.get("DEEPSEEK_API_KEY", "")
     deepseek_base_url: str = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     deepseek_model: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    image_api_key: str = os.environ.get("GROK_IMAGE_API_KEY", os.environ.get("XAI_API_KEY", ""))
+    image_base_url: str = os.environ.get("GROK_IMAGE_BASE_URL", "https://api.x.ai/v1")
+    image_model: str = os.environ.get("GROK_IMAGE_MODEL", "grok-imagine-image")
+    upload_dir: Path = Path(os.environ.get("ALICER_UPLOAD_DIR", ROOT / "data" / "uploads")).expanduser()
     amap_key: str = os.environ.get("AMAP_KEY", "")
     request_timeout_seconds: float = float(os.environ.get("ALICER_REQUEST_TIMEOUT_SECONDS", "60"))
 
@@ -32,4 +36,5 @@ class Settings(BaseModel):
 def get_settings() -> Settings:
     settings = Settings()
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.upload_dir.mkdir(parents=True, exist_ok=True)
     return settings

@@ -42,6 +42,14 @@ DEFAULT_SETTINGS: dict = {
             "content": "回复要简洁自然，可以亲密、调侃、撒娇；避免长篇说教，避免机械列表。",
         },
         {
+            "id": "emoji_style",
+            "title": "表情习惯",
+            "description": "控制聊天和朋友圈回复里的 emoji 使用。",
+            "enabled": True,
+            "order": 35,
+            "content": "可以自然带少量常用 emoji 或颜文字，比如 😊、🥺、✨、哼、欸嘿，但不要每句都加；亲密、调侃或朋友圈评论时可以更像真人一点。",
+        },
+        {
             "id": "environment",
             "title": "时间地点天气",
             "description": "自动注入手机当前时间、位置和天气。",
@@ -77,6 +85,9 @@ DEFAULT_SETTINGS: dict = {
         "longTerm": True,
         "autoExtract": True,
         "reviewBeforeSave": True,
+    },
+    "moments": {
+        "dailyPostProbability": 0.55,
     },
     "model": {
         "provider": "deepseek",

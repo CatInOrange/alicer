@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..db import Database
@@ -57,4 +58,63 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
             "promptDebug": prompt_debug,
         }
 
+    @router.post("/chat/stream")
+    async def chat_stream(request: ChatRequest) -> StreamingResponse:
+        return StreamingResponse(
+            _stream_chat(request, db=db, llm=llm),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
     return router
+
+
+async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
+    text = request.text.strip()
+    if not text:
+        yield _sse("error", {"error": "empty message"})
+        return
+    user_message = db.add_message(
+        message_id=f"msg_{uuid.uuid4().hex}",
+        role="user",
+        content=text,
+    )
+    assistant_id = f"msg_{uuid.uuid4().hex}"
+    yield _sse("start", {"userMessage": user_message, "assistantMessageId": assistant_id})
+    try:
+        settings = merge_settings(request.settings or db.get_settings())
+        environment = await enrich_weather(request.environment)
+        recent = db.list_messages(limit=40)
+        memories = db.list_memories(limit=30)
+        messages, prompt_debug = render_prompt(
+            settings=settings,
+            recent_messages=recent,
+            memories=memories,
+            environment=environment,
+        )
+        full_reply = ""
+        async for chunk in llm.stream_complete(messages=messages, model_settings=settings.get("model") or {}):
+            full_reply += chunk
+            yield _sse("chunk", {"delta": chunk, "visibleText": full_reply})
+        assistant_message = db.add_message(
+            message_id=assistant_id,
+            role="assistant",
+            content=full_reply.strip(),
+            metadata={"promptDebug": prompt_debug},
+        )
+        yield _sse(
+            "final",
+            {
+                "userMessage": user_message,
+                "assistantMessage": assistant_message,
+                "promptDebug": prompt_debug,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        yield _sse("error", {"error": str(exc)})
+
+
+def _sse(event: str, payload: dict) -> str:
+    import json
+
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"

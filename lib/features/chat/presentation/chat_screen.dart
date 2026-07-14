@@ -66,7 +66,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _error = null;
       });
       await _cacheStore.saveMessages(remote);
-      _jumpToBottom();
+      if (_isNearBottom()) _scrollToBottom(animated: false);
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = '后端暂时连不上，正在使用本地缓存');
@@ -86,7 +86,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final pending = ChatMessage(
       id: 'local_pending_${DateTime.now().microsecondsSinceEpoch}',
       role: 'assistant',
-      content: '我在想怎么认真回应你...',
+      content: '',
       createdAt: DateTime.now(),
       isPending: true,
     );
@@ -96,7 +96,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _messages = [..._messages, userMessage, pending];
       _error = null;
     });
-    _jumpToBottom();
+    _scrollToBottom(animated: false);
     await _cacheStore.saveMessages(
       _messages.where((m) => !m.isPending).toList(),
     );
@@ -104,9 +104,30 @@ class _ChatScreenState extends State<ChatScreen> {
       final environment = await _environmentService.collect(
         _settings.environment,
       );
-      final reply = await ChatRepository(
+      ChatMessage? reply;
+      var visibleText = '';
+      await for (final event in ChatRepository(
         settings: _settings,
-      ).sendMessage(text: text, environment: environment.payload);
+      ).streamMessage(text: text, environment: environment.payload)) {
+        if (!mounted) return;
+        if (event.type == 'chunk') {
+          visibleText =
+              (event.payload['visibleText'] ?? visibleText).toString();
+          _replaceMessage(pending.id, pending.copyWith(content: visibleText));
+          _followStreamIfNeeded();
+        } else if (event.type == 'final') {
+          final raw = event.payload['assistantMessage'];
+          if (raw is Map) {
+            reply = ChatMessage.fromJson(Map<String, dynamic>.from(raw));
+          }
+        } else if (event.type == 'error') {
+          throw Exception(event.payload['error'] ?? 'stream error');
+        }
+      }
+      reply ??= pending.copyWith(
+        content: visibleText.isEmpty ? '我刚刚走神了一下，再和我说一遍好不好。' : visibleText,
+        isPending: false,
+      );
       if (!mounted) return;
       final next = [
         ..._messages.where((message) => message.id != pending.id),
@@ -118,7 +139,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _statusText = environment.label;
       });
       await _cacheStore.saveMessages(next);
-      _jumpToBottom();
+      _scrollToBottom(animated: true);
     } catch (error) {
       if (!mounted) return;
       final failed = pending.copyWith(
@@ -137,18 +158,42 @@ class _ChatScreenState extends State<ChatScreen> {
         _error = error.toString();
       });
       await _cacheStore.saveMessages(next);
-      _jumpToBottom();
+      _scrollToBottom(animated: true);
     }
   }
 
-  void _jumpToBottom() {
+  void _replaceMessage(String id, ChatMessage next) {
+    setState(() {
+      _messages = [
+        for (final message in _messages)
+          if (message.id == id) next else message,
+      ];
+    });
+  }
+
+  bool _isNearBottom() {
+    if (!_scrollController.hasClients) return true;
+    final position = _scrollController.position;
+    return position.maxScrollExtent - position.pixels < 120;
+  }
+
+  void _followStreamIfNeeded() {
+    if (_isNearBottom()) _scrollToBottom(animated: false);
+  }
+
+  void _scrollToBottom({required bool animated}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 260),
-        curve: Curves.easeOutCubic,
-      );
+      final target = _scrollController.position.maxScrollExtent;
+      if (animated) {
+        _scrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        _scrollController.jumpTo(target);
+      }
     });
   }
 
@@ -385,7 +430,7 @@ class _Composer extends StatelessWidget {
         children: [
           IconButton(
             tooltip: '更多',
-            onPressed: () {},
+            onPressed: null,
             icon: const Icon(Icons.add_circle_outline),
           ),
           Expanded(

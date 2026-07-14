@@ -16,9 +16,12 @@ class ApiClient {
     return Uri.parse('$baseUrl$normalized').replace(queryParameters: query);
   }
 
-  Future<Map<String, dynamic>> getJson(String path) async {
+  Future<Map<String, dynamic>> getJson(
+    String path, [
+    Map<String, String>? query,
+  ]) async {
     final response = await _httpClient
-        .get(uri(path), headers: {'Accept': 'application/json'})
+        .get(uri(path, query), headers: {'Accept': 'application/json'})
         .timeout(const Duration(seconds: 18));
     return _decodeResponse(response);
   }
@@ -55,6 +58,20 @@ class ApiClient {
         )
         .timeout(const Duration(seconds: 30));
     return _decodeResponse(response);
+  }
+
+  Future<http.StreamedResponse> postStream(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    final request =
+        http.Request('POST', uri(path))
+          ..headers.addAll({
+            'Accept': 'text/event-stream',
+            'Content-Type': 'application/json',
+          })
+          ..body = jsonEncode(body);
+    return _httpClient.send(request).timeout(const Duration(seconds: 90));
   }
 
   Map<String, dynamic> _decodeResponse(http.Response response) {

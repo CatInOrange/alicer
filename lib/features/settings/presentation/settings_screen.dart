@@ -288,6 +288,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             _CollapsiblePanel(
+              icon: Icons.photo_camera_back_outlined,
+              title: '朋友圈',
+              subtitle: '伴侣自动发朋友圈的频率和真实感。',
+              child: Column(
+                children: [
+                  _SliderRow(
+                    icon: Icons.auto_awesome_motion_outlined,
+                    title: '每天发朋友圈概率',
+                    subtitle:
+                        '${(_settings.moments.dailyPostProbability * 100).round()}% · 后端会按这个概率生成每日动态。',
+                    value: _settings.moments.dailyPostProbability,
+                    onChanged: (value) {
+                      setState(() {
+                        _settings = _settings.copyWith(
+                          moments: _settings.moments.copyWith(
+                            dailyPostProbability: value,
+                          ),
+                        );
+                      });
+                      unawaited(SettingsStore.save(_settings));
+                    },
+                  ),
+                ],
+              ),
+            ),
+            _CollapsiblePanel(
               icon: Icons.hub_outlined,
               title: '后端与模型',
               subtitle: 'Alicer 后端、DeepSeek 模型和生成参数。',
@@ -880,6 +906,56 @@ class _SwitchRow extends StatelessWidget {
             ),
           ),
           Switch(value: value, onChanged: onChanged),
+        ],
+      ),
+    );
+  }
+}
+
+class _SliderRow extends StatelessWidget {
+  const _SliderRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Icon(icon, color: colors.textMuted, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 3),
+                Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+                Slider(
+                  value: value,
+                  divisions: 20,
+                  label: '${(value * 100).round()}%',
+                  onChanged: onChanged,
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

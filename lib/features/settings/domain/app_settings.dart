@@ -185,6 +185,28 @@ class MemoryToggles {
   }
 }
 
+class MomentsSettings {
+  const MomentsSettings({this.dailyPostProbability = 0.55});
+
+  final double dailyPostProbability;
+
+  factory MomentsSettings.fromJson(Map<String, dynamic> json) {
+    final value = (json['dailyPostProbability'] as num?)?.toDouble() ?? 0.55;
+    return MomentsSettings(dailyPostProbability: value.clamp(0.0, 1.0));
+  }
+
+  Map<String, dynamic> toJson() => {
+    'dailyPostProbability': dailyPostProbability,
+  };
+
+  MomentsSettings copyWith({double? dailyPostProbability}) {
+    return MomentsSettings(
+      dailyPostProbability:
+          dailyPostProbability?.clamp(0.0, 1.0) ?? this.dailyPostProbability,
+    );
+  }
+}
+
 class ModelSettings {
   const ModelSettings({
     this.provider = 'deepseek',
@@ -278,6 +300,7 @@ class AlicerSettings {
     this.promptModules = defaultPromptModules,
     this.environment = const EnvironmentToggles(),
     this.memory = const MemoryToggles(),
+    this.moments = const MomentsSettings(),
     this.model = const ModelSettings(),
   });
 
@@ -286,6 +309,7 @@ class AlicerSettings {
   final List<PromptModule> promptModules;
   final EnvironmentToggles environment;
   final MemoryToggles memory;
+  final MomentsSettings moments;
   final ModelSettings model;
 
   factory AlicerSettings.fromJson(Map<String, dynamic> json) {
@@ -305,6 +329,9 @@ class AlicerSettings {
       memory: MemoryToggles.fromJson(
         Map<String, dynamic>.from((json['memory'] as Map?) ?? const {}),
       ),
+      moments: MomentsSettings.fromJson(
+        Map<String, dynamic>.from((json['moments'] as Map?) ?? const {}),
+      ),
       model: ModelSettings.fromJson(
         Map<String, dynamic>.from((json['model'] as Map?) ?? const {}),
       ),
@@ -317,6 +344,7 @@ class AlicerSettings {
     'promptModules': promptModules.map((item) => item.toJson()).toList(),
     'environment': environment.toJson(),
     'memory': memory.toJson(),
+    'moments': moments.toJson(),
     'model': model.toJson(),
   };
 
@@ -325,6 +353,7 @@ class AlicerSettings {
     'promptModules': promptModules.map((item) => item.toJson()).toList(),
     'environment': environment.toJson(),
     'memory': memory.toJson(),
+    'moments': moments.toJson(),
     'model': model.toJson(),
   };
 
@@ -334,6 +363,7 @@ class AlicerSettings {
     List<PromptModule>? promptModules,
     EnvironmentToggles? environment,
     MemoryToggles? memory,
+    MomentsSettings? moments,
     ModelSettings? model,
   }) {
     return AlicerSettings(
@@ -342,6 +372,7 @@ class AlicerSettings {
       promptModules: promptModules ?? this.promptModules,
       environment: environment ?? this.environment,
       memory: memory ?? this.memory,
+      moments: moments ?? this.moments,
       model: model ?? this.model,
     );
   }
@@ -357,6 +388,7 @@ IconData promptModuleIcon(String id) {
     'role_description' => Icons.badge_outlined,
     'personality_traits' => Icons.psychology_alt_outlined,
     'reply_style' => Icons.chat_outlined,
+    'emoji_style' => Icons.emoji_emotions_outlined,
     'environment' => Icons.wb_sunny_outlined,
     'short_term_memory' => Icons.short_text_outlined,
     'long_term_memory' => Icons.auto_stories_outlined,
@@ -400,6 +432,16 @@ const defaultPromptModules = <PromptModule>[
     content: '回复要简洁自然，可以亲密、调侃、撒娇；避免长篇说教，避免机械列表。',
     enabled: true,
     order: 30,
+  ),
+  PromptModule(
+    id: 'emoji_style',
+    title: '表情习惯',
+    description: '控制聊天和朋友圈回复里的 emoji 使用。',
+    icon: Icons.emoji_emotions_outlined,
+    content:
+        '可以自然带少量常用 emoji 或颜文字，比如 😊、🥺、✨、哼、欸嘿，但不要每句都加；亲密、调侃或朋友圈评论时可以更像真人一点。',
+    enabled: true,
+    order: 35,
   ),
   PromptModule(
     id: 'environment',

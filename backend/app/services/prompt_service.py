@@ -9,7 +9,7 @@ def merge_settings(stored: dict | None) -> dict:
     if not stored:
         return DEFAULT_SETTINGS
     merged = {**DEFAULT_SETTINGS, **stored}
-    for key in ("companion", "environment", "memory", "model"):
+    for key in ("companion", "environment", "memory", "moments", "model"):
         merged[key] = {**DEFAULT_SETTINGS.get(key, {}), **stored.get(key, {})}
     if not stored.get("promptModules"):
         merged["promptModules"] = DEFAULT_SETTINGS["promptModules"]
