@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="${1:-fakecat/alicer}"
+repo="${1:-CatInOrange/alicer}"
 key_properties="android/key.properties"
 keystore_file="android/upload-keystore.p12"
 
