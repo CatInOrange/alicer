@@ -30,6 +30,11 @@ migrate_working_dir/
 .env
 .env.*
 .github-secrets/
+backend/.venv/
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/data/
 android/key.properties
 android/upload-keystore.jks
 android/upload-keystore.p12

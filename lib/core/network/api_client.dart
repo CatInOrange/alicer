@@ -1,0 +1,85 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
+import 'http_client_factory.dart';
+
+class ApiClient {
+  ApiClient({required this.baseUrl, http.Client? httpClient})
+    : _httpClient = httpClient ?? createHttpClient(baseUrl);
+
+  final String baseUrl;
+  final http.Client _httpClient;
+
+  Uri uri(String path, [Map<String, String>? query]) {
+    final normalized = path.startsWith('/') ? path : '/$path';
+    return Uri.parse('$baseUrl$normalized').replace(queryParameters: query);
+  }
+
+  Future<Map<String, dynamic>> getJson(String path) async {
+    final response = await _httpClient
+        .get(uri(path), headers: {'Accept': 'application/json'})
+        .timeout(const Duration(seconds: 18));
+    return _decodeResponse(response);
+  }
+
+  Future<Map<String, dynamic>> postJson(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    final response = await _httpClient
+        .post(
+          uri(path),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode(body),
+        )
+        .timeout(const Duration(seconds: 75));
+    return _decodeResponse(response);
+  }
+
+  Future<Map<String, dynamic>> putJson(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    final response = await _httpClient
+        .put(
+          uri(path),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode(body),
+        )
+        .timeout(const Duration(seconds: 30));
+    return _decodeResponse(response);
+  }
+
+  Map<String, dynamic> _decodeResponse(http.Response response) {
+    final decoded =
+        response.body.trim().isEmpty
+            ? <String, dynamic>{}
+            : jsonDecode(utf8.decode(response.bodyBytes));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        statusCode: response.statusCode,
+        message: decoded is Map ? decoded.toString() : response.body,
+      );
+    }
+    if (decoded is Map<String, dynamic>) return decoded;
+    if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    return {'data': decoded};
+  }
+}
+
+class ApiException implements Exception {
+  const ApiException({required this.statusCode, required this.message});
+
+  final int statusCode;
+  final String message;
+
+  @override
+  String toString() => 'HTTP $statusCode: $message';
+}

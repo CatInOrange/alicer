@@ -3,6 +3,45 @@
 Alicer is a Flutter companion app with a chat-first home screen, time journals,
 and a Tavern-style prompt configuration page.
 
+## Architecture
+
+- Flutter app: chat-first UI, time journals, collapsible prompt/settings hub.
+- Local mobile cache: messages are stored with `sqflite`; settings and local
+  avatar file paths are stored with `shared_preferences`.
+- Backend: FastAPI + SQLite, under `backend/`.
+- Model provider: DeepSeek through the OpenAI-compatible chat completions API.
+- Reverse proxy: `emo.newthu.com` -> `127.0.0.1:18083`.
+
+The app defaults to `https://emo.newthu.com`. Until a valid certificate for
+`emo.newthu.com` is issued, the native client accepts the current certificate
+only for that host. Remove that compatibility path after the certificate is
+fixed.
+
+## Backend
+
+```bash
+cd backend
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env
+```
+
+Set `DEEPSEEK_API_KEY` in `backend/.env`, then run:
+
+```bash
+cd ..
+backend/.venv/bin/python backend/run.py
+```
+
+Useful endpoints:
+
+- `GET /api/health`
+- `GET /api/messages`
+- `POST /api/chat`
+- `GET /api/settings`
+- `PUT /api/settings`
+- `POST /api/prompt/preview`
+
 ## Android release flow
 
 Android APK builds are done by GitHub Actions, following the AliceChat release

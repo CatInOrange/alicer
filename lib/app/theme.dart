@@ -12,7 +12,7 @@ String? _desktopFontFamily() {
 }
 
 ThemeData buildAlicerTheme({Brightness brightness = Brightness.light}) {
-  const seed = Color(0xFF7C4DFF);
+  const seed = Color(0xFFD95F76);
   final isDark = brightness == Brightness.dark;
   final colors = isDark ? AlicerColors.dark() : AlicerColors.light();
   final colorScheme = ColorScheme.fromSeed(
@@ -120,33 +120,33 @@ class AlicerColors extends ThemeExtension<AlicerColors> {
   factory AlicerColors.light() {
     return const AlicerColors(
       background: Color(0xFFF6F7FB),
-      surface: Colors.white,
-      surfaceSoft: Color(0xFFF0F2F7),
-      inputBackground: Colors.white,
-      border: Color(0xFFE5E8F0),
-      text: Color(0xFF1F2430),
-      textSubtle: Color(0xFF4B5568),
-      textMuted: Color(0xFF98A1B3),
-      userBubble: Color(0xFF6D4AFF),
+      surface: Color(0xFFFFFCFA),
+      surfaceSoft: Color(0xFFF3F0EA),
+      inputBackground: Color(0xFFFFFBF8),
+      border: Color(0xFFE8DED8),
+      text: Color(0xFF252225),
+      textSubtle: Color(0xFF5D5454),
+      textMuted: Color(0xFF9B8D89),
+      userBubble: Color(0xFF2E6F68),
       userBubbleText: Colors.white,
-      companionBubble: Colors.white,
-      shadow: Color(0x121F2430),
+      companionBubble: Color(0xFFFFF7F2),
+      shadow: Color(0x14252225),
     );
   }
 
   factory AlicerColors.dark() {
     return const AlicerColors(
-      background: Color(0xFF111318),
-      surface: Color(0xFF1B1E26),
-      surfaceSoft: Color(0xFF242936),
-      inputBackground: Color(0xFF20242D),
-      border: Color(0xFF303644),
-      text: Color(0xFFE8ECF5),
-      textSubtle: Color(0xFFC5CAD8),
-      textMuted: Color(0xFF8F98AA),
-      userBubble: Color(0xFF5C4BCB),
-      userBubbleText: Color(0xFFF8F7FF),
-      companionBubble: Color(0xFF20242D),
+      background: Color(0xFF151212),
+      surface: Color(0xFF211C1C),
+      surfaceSoft: Color(0xFF2B2524),
+      inputBackground: Color(0xFF292222),
+      border: Color(0xFF3A302F),
+      text: Color(0xFFF2ECE8),
+      textSubtle: Color(0xFFD8C9C4),
+      textMuted: Color(0xFFAB9993),
+      userBubble: Color(0xFF2F7B70),
+      userBubbleText: Color(0xFFF4FFFC),
+      companionBubble: Color(0xFF302423),
       shadow: Color(0x66000000),
     );
   }
