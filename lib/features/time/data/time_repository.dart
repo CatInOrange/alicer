@@ -42,6 +42,7 @@ class TimeRepository {
   Future<MomentPost?> generateMoment() async {
     final response = await _client.postJson('/api/moments/generate', {
       'force': true,
+      'forcePhoto': true,
       'settings': settings.toBackendJson(),
     });
     final raw = response['moment'];

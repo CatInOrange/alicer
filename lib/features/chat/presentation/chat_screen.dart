@@ -173,7 +173,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isNearBottom() {
     if (!_scrollController.hasClients) return true;
     final position = _scrollController.position;
-    return position.maxScrollExtent - position.pixels < 120;
+    return position.pixels < 120;
   }
 
   void _followStreamIfNeeded() {
@@ -183,15 +183,14 @@ class _ChatScreenState extends State<ChatScreen> {
   void _scrollToBottom({required bool animated}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
-      final target = _scrollController.position.maxScrollExtent;
       if (animated) {
         _scrollController.animateTo(
-          target,
+          0,
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOutCubic,
         );
       } else {
-        _scrollController.jumpTo(target);
+        _scrollController.jumpTo(0);
       }
     });
   }
@@ -262,10 +261,12 @@ class _ChatScreenState extends State<ChatScreen> {
                         ? const Center(child: CircularProgressIndicator())
                         : ListView.builder(
                           controller: _scrollController,
+                          reverse: true,
                           padding: const EdgeInsets.fromLTRB(14, 16, 14, 18),
                           itemCount: _messages.length,
                           itemBuilder: (context, index) {
-                            final message = _messages[index];
+                            final message =
+                                _messages[_messages.length - 1 - index];
                             return _MessageBubble(
                               message: message,
                               companion: companion,

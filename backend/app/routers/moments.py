@@ -28,7 +28,12 @@ def create_moments_router(db: Database, llm: LlmService) -> APIRouter:
         force = payload.get("force") is True
         if not force and random.random() > probability:
             return {"created": False, "moment": None}
-        moment = await _generate_moment(db, llm, settings=settings)
+        moment = await _generate_moment(
+            db,
+            llm,
+            settings=settings,
+            force_photo=payload.get("forcePhoto") is True,
+        )
         return {"created": True, "moment": moment}
 
     @router.post("/moments/{moment_id}/like")
@@ -70,7 +75,7 @@ def create_moments_router(db: Database, llm: LlmService) -> APIRouter:
     return router
 
 
-async def _generate_moment(db: Database, llm: LlmService, *, settings: dict) -> dict:
+async def _generate_moment(db: Database, llm: LlmService, *, settings: dict, force_photo: bool = False) -> dict:
     companion = str(((settings.get("companion") or {}).get("name") or "Alice")).strip() or "Alice"
     moments_settings = settings.get("moments") or {}
     photo_probability = _probability(moments_settings.get("photoProbability"), default=0.45)
@@ -100,7 +105,7 @@ async def _generate_moment(db: Database, llm: LlmService, *, settings: dict) -> 
     raw = await llm.complete(messages=prompt, model_settings=settings.get("model") or {})
     content, image_prompt = _parse_moment(raw)
     image = {"imageUrl": "", "provider": {"skippedByProbability": True}}
-    if random.random() <= photo_probability:
+    if force_photo or random.random() <= photo_probability:
         image = await llm.generate_image(
             prompt=(
                 "Keep the same face and hairstyle, tall slender body with long legs, "
@@ -120,6 +125,7 @@ async def _generate_moment(db: Database, llm: LlmService, *, settings: dict) -> 
         metadata={
             "imageProvider": image.get("provider") or {},
             "photoProbability": photo_probability,
+            "forcePhoto": force_photo,
             "referenceImageUrl": reference_image_url,
         },
     )

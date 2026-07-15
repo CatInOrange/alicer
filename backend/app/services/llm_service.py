@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import mimetypes
 import time
 
 import httpx
@@ -68,18 +69,16 @@ class LlmService:
                 "imageUrl": "",
                 "provider": {"configured": False, "model": self.settings.image_model},
             }
-        has_reference = bool(reference_image_url.strip())
-        url = self.settings.image_base_url.rstrip("/") + (
-            "/images/edits" if has_reference else "/images/generations"
-        )
+        reference_image = await self._reference_image_payload(reference_image_url)
+        url = self.settings.image_base_url.rstrip("/") + "/images/generations"
         payload = {
             "model": self.settings.image_model,
             "prompt": prompt,
             "n": 1,
             "response_format": "b64_json",
         }
-        if has_reference:
-            payload["image"] = {"url": reference_image_url.strip()}
+        if reference_image:
+            payload["image"] = reference_image
         async with httpx.AsyncClient(timeout=max(self.settings.request_timeout_seconds, 120)) as client:
             response = await client.post(
                 url,
@@ -103,13 +102,34 @@ class LlmService:
         image_bytes = base64.b64decode(str(b64))
         target_dir = self.settings.upload_dir / bucket
         target_dir.mkdir(parents=True, exist_ok=True)
-        name = f"{int(time.time() * 1000)}.png"
+        name = f"{int(time.time() * 1000)}{_image_extension(image_bytes)}"
         target = target_dir / name
         target.write_bytes(image_bytes)
         return {
             "imageUrl": f"/uploads/{bucket}/{name}",
             "provider": {"configured": True, "model": self.settings.image_model, "remote": False},
         }
+
+    async def _reference_image_payload(self, source: str) -> str:
+        value = source.strip()
+        if not value:
+            return ""
+        if value.startswith("data:image/"):
+            return value
+        if value.startswith("http://") or value.startswith("https://"):
+            async with httpx.AsyncClient(timeout=max(self.settings.request_timeout_seconds, 60)) as client:
+                response = await client.get(value, headers={"User-Agent": "Alicer Moments Image/1.0"})
+                response.raise_for_status()
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip()
+            mime = content_type if content_type.startswith("image/") else "image/jpeg"
+            return f"data:{mime};base64,{base64.b64encode(response.content).decode('ascii')}"
+        from pathlib import Path
+
+        path = Path(value).expanduser()
+        if not path.exists() or not path.is_file():
+            return ""
+        mime = mimetypes.guess_type(path.name)[0] or "image/png"
+        return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
     def _payload(self, *, messages: list[dict], model_settings: dict, stream: bool) -> dict:
         return {
@@ -144,3 +164,13 @@ class LlmService:
 def _chunk_text(text: str, size: int = 8):
     for index in range(0, len(text), size):
         yield text[index : index + size]
+
+
+def _image_extension(image_bytes: bytes) -> str:
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        return ".webp"
+    return ".png"
