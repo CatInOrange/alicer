@@ -74,6 +74,16 @@ class MomentPost {
           .toList(growable: false),
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'author': author,
+    'content': content,
+    'imageUrl': imageUrl,
+    'createdAt': createdAt.toIso8601String(),
+    'likes': likes,
+    'comments': comments.map((item) => item.toJson()).toList(),
+  };
 }
 
 class MomentComment {
@@ -100,6 +110,14 @@ class MomentComment {
       createdAt: _parseDate(json['createdAt']),
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'author': author,
+    'content': content,
+    'parentId': parentId,
+    'createdAt': createdAt.toIso8601String(),
+  };
 }
 
 DateTime _parseDate(Object? raw) {

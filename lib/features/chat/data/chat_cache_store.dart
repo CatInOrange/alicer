@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../domain/chat_models.dart';
@@ -12,6 +13,8 @@ class ChatCacheStore {
   static final instance = ChatCacheStore._();
   static const _dbName = 'alicer_chat_cache.db';
   static const _dbVersion = 1;
+  static const _lastSyncKey = 'alicer_chat_cache_last_sync_ms';
+  static const refreshAfter = Duration(minutes: 5);
   static const maxCachedMessages = 240;
 
   Database? _db;
@@ -56,7 +59,10 @@ class ChatCacheStore {
     }
   }
 
-  Future<void> saveMessages(List<ChatMessage> messages) async {
+  Future<void> saveMessages(
+    List<ChatMessage> messages, {
+    bool markSynced = true,
+  }) async {
     try {
       final db = await _database();
       final trimmed =
@@ -75,8 +81,26 @@ class ChatCacheStore {
         }
         await batch.commit(noResult: true);
       });
+      if (markSynced) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt(_lastSyncKey, DateTime.now().millisecondsSinceEpoch);
+      }
     } catch (error, stackTrace) {
       debugPrint('[alicer.cache] save failed: $error\n$stackTrace');
+    }
+  }
+
+  Future<bool> isFresh() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getInt(_lastSyncKey);
+      if (raw == null) return false;
+      final age = DateTime.now().difference(
+        DateTime.fromMillisecondsSinceEpoch(raw),
+      );
+      return age < refreshAfter;
+    } catch (_) {
+      return false;
     }
   }
 

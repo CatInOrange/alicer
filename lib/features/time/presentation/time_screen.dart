@@ -6,9 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../../app/theme.dart';
-import '../../../core/network/api_client.dart';
 import '../../settings/data/settings_store.dart';
 import '../../settings/domain/app_settings.dart';
+import '../data/moment_cache_store.dart';
+import '../data/moment_image_cache_store.dart';
 import '../data/time_repository.dart';
 import '../domain/time_models.dart';
 
@@ -157,6 +158,7 @@ class MomentsFeed extends StatefulWidget {
 
 class _MomentsFeedState extends State<MomentsFeed> {
   late final TimeRepository _repo = TimeRepository(settings: widget.settings);
+  final _cacheStore = MomentCacheStore.instance;
   final _commentController = TextEditingController();
   List<MomentPost> _moments = const [];
   String? _replyingTo;
@@ -177,6 +179,26 @@ class _MomentsFeedState extends State<MomentsFeed> {
   }
 
   Future<void> _load() async {
+    final cached = await _cacheStore.loadMoments();
+    if (!mounted) return;
+    if (cached.isNotEmpty) {
+      setState(() {
+        _moments = cached;
+        _loading = false;
+        _error = null;
+      });
+      if (await _cacheStore.isFresh()) return;
+    }
+    await _refreshFromServer(showLoading: cached.isEmpty);
+  }
+
+  Future<void> _refreshFromServer({bool showLoading = false}) async {
+    if (showLoading && mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final moments = await _repo.listMoments();
       if (!mounted) return;
@@ -185,10 +207,11 @@ class _MomentsFeedState extends State<MomentsFeed> {
         _loading = false;
         _error = null;
       });
+      await _cacheStore.saveMoments(moments);
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _error = '$error';
+        if (_moments.isEmpty) _error = '$error';
         _loading = false;
       });
     }
@@ -198,7 +221,7 @@ class _MomentsFeedState extends State<MomentsFeed> {
     setState(() => _generating = true);
     try {
       await _repo.generateMoment();
-      await _load();
+      await _refreshFromServer();
     } finally {
       if (mounted) setState(() => _generating = false);
     }
@@ -233,6 +256,7 @@ class _MomentsFeedState extends State<MomentsFeed> {
           if (item.id == next.id) next else item,
       ];
     });
+    unawaited(_cacheStore.upsertMoment(next));
   }
 
   @override
@@ -242,7 +266,7 @@ class _MomentsFeedState extends State<MomentsFeed> {
       return _EmptyState(icon: Icons.wifi_off_rounded, text: _error!);
     }
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: () => _refreshFromServer(),
       child: ListView(
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 28),
         children: [
@@ -492,7 +516,10 @@ class _MomentImageState extends State<_MomentImage> {
   }
 
   Future<Uint8List> _loadImage() {
-    return ApiClient(baseUrl: widget.apiBaseUrl).getBytes(widget.imageUrl);
+    return MomentImageCacheStore.instance.loadImage(
+      apiBaseUrl: widget.apiBaseUrl,
+      imageUrl: widget.imageUrl,
+    );
   }
 
   @override

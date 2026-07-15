@@ -54,7 +54,9 @@ class _ChatScreenState extends State<ChatScreen> {
       _messages = cached.isEmpty ? _starterMessages(settings) : cached;
       _isLoading = false;
     });
-    unawaited(_refreshFromServer(settings));
+    if (cached.isEmpty || !(await _cacheStore.isFresh())) {
+      unawaited(_refreshFromServer(settings));
+    }
   }
 
   Future<void> _refreshFromServer(AlicerSettings settings) async {
@@ -99,6 +101,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom(animated: false);
     await _cacheStore.saveMessages(
       _messages.where((m) => !m.isPending).toList(),
+      markSynced: false,
     );
     try {
       final environment = await _environmentService.collect(
@@ -156,7 +159,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _statusText = '本地缓存中';
         _error = error.toString();
       });
-      await _cacheStore.saveMessages(next);
+      await _cacheStore.saveMessages(next, markSynced: false);
       _scrollToBottom(animated: true);
     }
   }
