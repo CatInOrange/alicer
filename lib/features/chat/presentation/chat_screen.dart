@@ -405,7 +405,14 @@ class _MessageBubble extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                       Text.rich(
-                        _renderMessageContent(message.content, textColor),
+                        _renderMessageContent(
+                          message.content,
+                          textColor,
+                          parentheticalColor:
+                              isUser
+                                  ? const Color(0xFFC9FFF4)
+                                  : colors.textMuted,
+                        ),
                         style: TextStyle(color: textColor, height: 1.48),
                       ),
                     ],
@@ -428,7 +435,11 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
-TextSpan _renderMessageContent(String text, Color color) {
+TextSpan _renderMessageContent(
+  String text,
+  Color color, {
+  required Color parentheticalColor,
+}) {
   final spans = <TextSpan>[];
   final pattern = RegExp(r'(\([^()\n]{1,80}\)|（[^（）\n]{1,80}）)');
   var cursor = 0;
@@ -440,7 +451,7 @@ TextSpan _renderMessageContent(String text, Color color) {
       TextSpan(
         text: text.substring(match.start, match.end),
         style: TextStyle(
-          color: color.withValues(alpha: 0.58),
+          color: parentheticalColor.withValues(alpha: 0.78),
           fontStyle: FontStyle.italic,
         ),
       ),
@@ -581,24 +592,6 @@ class _Composer extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: colors.surfaceSoft,
-              borderRadius: BorderRadius.circular(19),
-            ),
-            child: IconButton(
-              tooltip: '表情',
-              padding: EdgeInsets.zero,
-              iconSize: 21,
-              onPressed:
-                  isSending ? null : () => unawaited(_showEmojiPicker(context)),
-              color: isSending ? colors.textMuted : theme.colorScheme.primary,
-              icon: const Icon(Icons.emoji_emotions_outlined),
-            ),
-          ),
-          const SizedBox(width: 8),
           Expanded(
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -623,6 +616,24 @@ class _Composer extends StatelessWidget {
                   isDense: true,
                 ),
               ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: colors.surfaceSoft,
+              borderRadius: BorderRadius.circular(19),
+            ),
+            child: IconButton(
+              tooltip: '表情',
+              padding: EdgeInsets.zero,
+              iconSize: 21,
+              onPressed:
+                  isSending ? null : () => unawaited(_showEmojiPicker(context)),
+              color: isSending ? colors.textMuted : theme.colorScheme.primary,
+              icon: const Icon(Icons.emoji_emotions_outlined),
             ),
           ),
           const SizedBox(width: 6),
