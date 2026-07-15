@@ -464,9 +464,114 @@ class _Composer extends StatelessWidget {
   final bool isSending;
   final VoidCallback onSend;
 
+  static const List<String> _quickEmojis = [
+    '😀',
+    '😁',
+    '😂',
+    '😊',
+    '🥰',
+    '😘',
+    '🤔',
+    '🥺',
+    '😎',
+    '😭',
+    '😡',
+    '👍',
+    '👏',
+    '🙏',
+    '💪',
+    '❤️',
+    '💕',
+    '✨',
+    '🌸',
+    '🌙',
+    '☀️',
+    '🎉',
+    '🍜',
+    '🍵',
+  ];
+
+  void _insertEmoji(String emoji) {
+    final value = controller.value;
+    final selection = value.selection;
+    final start =
+        selection.isValid
+            ? selection.start.clamp(0, value.text.length).toInt()
+            : value.text.length;
+    final end =
+        selection.isValid
+            ? selection.end.clamp(0, value.text.length).toInt()
+            : value.text.length;
+    final nextText = value.text.replaceRange(start, end, emoji);
+    final nextOffset = start + emoji.length;
+    controller.value = value.copyWith(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextOffset),
+      composing: TextRange.empty,
+    );
+  }
+
+  Future<void> _showEmojiPicker(BuildContext context) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        final colors = context.alicerColors;
+        return SafeArea(
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
+            decoration: BoxDecoration(
+              color: colors.surface,
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(color: colors.border),
+              boxShadow: [
+                BoxShadow(
+                  color: colors.shadow,
+                  blurRadius: 24,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _quickEmojis.length,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 8,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+              ),
+              itemBuilder: (context, index) {
+                final emoji = _quickEmojis[index];
+                return InkWell(
+                  borderRadius: BorderRadius.circular(18),
+                  onTap: () {
+                    _insertEmoji(emoji);
+                    Navigator.of(context).pop();
+                  },
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colors.surfaceSoft.withValues(alpha: 0.62),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Center(
+                      child: Text(emoji, style: const TextStyle(fontSize: 22)),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.alicerColors;
+    final theme = Theme.of(context);
     return Container(
       decoration: BoxDecoration(
         color: colors.surface.withValues(alpha: 0.96),
@@ -474,40 +579,89 @@ class _Composer extends StatelessWidget {
       ),
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          IconButton(
-            tooltip: '更多',
-            onPressed: null,
-            icon: const Icon(Icons.add_circle_outline),
-          ),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              minLines: 1,
-              maxLines: 4,
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => onSend(),
-              decoration: const InputDecoration(hintText: '和她说点什么'),
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: colors.surfaceSoft,
+              borderRadius: BorderRadius.circular(19),
+            ),
+            child: IconButton(
+              tooltip: '表情',
+              padding: EdgeInsets.zero,
+              iconSize: 21,
+              onPressed:
+                  isSending ? null : () => unawaited(_showEmojiPicker(context)),
+              color: isSending ? colors.textMuted : theme.colorScheme.primary,
+              icon: const Icon(Icons.emoji_emotions_outlined),
             ),
           ),
           const SizedBox(width: 8),
-          FilledButton(
-            onPressed: isSending ? null : onSend,
-            style: FilledButton.styleFrom(
-              fixedSize: const Size(48, 48),
-              padding: EdgeInsets.zero,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
+          Expanded(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: colors.inputBackground,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: colors.shadow,
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: TextField(
+                controller: controller,
+                minLines: 1,
+                maxLines: 4,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => onSend(),
+                decoration: const InputDecoration(
+                  hintText: '和她说点什么',
+                  isDense: true,
+                ),
               ),
             ),
-            child:
-                isSending
-                    ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                    : const Icon(Icons.arrow_upward_rounded),
+          ),
+          const SizedBox(width: 6),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color:
+                  isSending
+                      ? theme.colorScheme.primary.withValues(alpha: 0.38)
+                      : theme.colorScheme.primary,
+              borderRadius: BorderRadius.circular(19),
+              boxShadow: [
+                BoxShadow(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.22),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: IconButton(
+              tooltip: '发送',
+              padding: EdgeInsets.zero,
+              iconSize: 20,
+              onPressed: isSending ? null : onSend,
+              color: Colors.white,
+              icon:
+                  isSending
+                      ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                      : const Icon(Icons.arrow_upward_rounded),
+            ),
           ),
         ],
       ),
