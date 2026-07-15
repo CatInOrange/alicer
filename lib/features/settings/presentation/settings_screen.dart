@@ -373,6 +373,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     isUploading: _isUploadingReference,
                     onTap: _isUploadingReference ? null : _pickReferenceImage,
                   ),
+                  const SizedBox(height: 8),
+                  _ActionRow(
+                    icon: Icons.tune_rounded,
+                    title: '照片公共提示词',
+                    subtitle: _settings.moments.identityPromptPrefix,
+                    onTap: _editMomentIdentityPrompt,
+                  ),
                 ],
               ),
             ),
@@ -725,6 +732,93 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } finally {
       if (mounted) setState(() => _isUploadingReference = false);
     }
+  }
+
+  Future<void> _editMomentIdentityPrompt() async {
+    final controller = TextEditingController(
+      text: _settings.moments.identityPromptPrefix,
+    );
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              0,
+              16,
+              16 + MediaQuery.of(context).viewInsets.bottom,
+            ),
+            child: SizedBox(
+              height: MediaQuery.of(context).size.height * 0.72,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '照片公共提示词',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '会拼在每次朋友圈照片场景前面。可用 {{companion.name}} 和 {{user.name}}。',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: controller,
+                      expands: true,
+                      minLines: null,
+                      maxLines: null,
+                      textAlignVertical: TextAlignVertical.top,
+                      decoration: const InputDecoration(labelText: '公共提示词'),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed:
+                            () =>
+                                controller.text =
+                                    defaultMomentIdentityPromptPrefix,
+                        child: const Text('恢复默认'),
+                      ),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('取消'),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton.icon(
+                        onPressed:
+                            () => Navigator.of(
+                              context,
+                            ).pop(controller.text.trim()),
+                        icon: const Icon(Icons.check_rounded, size: 18),
+                        label: const Text('保存'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    controller.dispose();
+    if (result == null) return;
+    final next = _settings.copyWith(
+      moments: _settings.moments.copyWith(
+        identityPromptPrefix:
+            result.isEmpty ? defaultMomentIdentityPromptPrefix : result,
+      ),
+    );
+    setState(() => _settings = next);
+    await SettingsStore.save(next);
   }
 
   Future<void> _probeEnvironment() async {
@@ -1447,7 +1541,12 @@ class _ActionRow extends StatelessWidget {
                 children: [
                   Text(title, style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 3),
-                  Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+                  Text(
+                    subtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ],
               ),
             ),

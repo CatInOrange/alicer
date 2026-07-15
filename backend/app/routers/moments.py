@@ -110,6 +110,11 @@ async def _generate_moment(db: Database, llm: LlmService, *, settings: dict, for
     moments_settings = settings.get("moments") or {}
     photo_probability = _probability(moments_settings.get("photoProbability"), default=0.45)
     reference_image_url = str(moments_settings.get("referenceImageUrl") or "").strip()
+    identity_prompt_prefix = _render_companion_vars(
+        str(moments_settings.get("identityPromptPrefix") or "").strip() or _default_identity_prompt_prefix(),
+        companion=companion,
+        user_name=user_name,
+    )
     role_context = _companion_context(settings, companion=companion, user_name=user_name)
     recent = db.list_messages(limit=120)
     recent_text = "\n".join(
@@ -143,11 +148,7 @@ async def _generate_moment(db: Database, llm: LlmService, *, settings: dict, for
     if force_photo or random.random() <= photo_probability:
         image = await llm.generate_image(
             prompt=(
-                f"The only person in the image is {companion}. Use the reference image as the identity source. "
-                "Preserve the exact same face, facial structure, hairstyle, hair color, age impression, body type, and overall vibe from the reference image. "
-                "If any scene detail conflicts with the reference person's identity, the reference image wins. "
-                "Do not create a different woman, do not change ethnicity, do not change hairstyle, do not add other people. "
-                "Natural candid smartphone photo for a WeChat Moments post, soft realistic lighting, no text, no watermark. "
+                f"{identity_prompt_prefix.strip()} "
                 f"Scene: {image_prompt}"
             ),
             bucket="moments",
@@ -164,6 +165,7 @@ async def _generate_moment(db: Database, llm: LlmService, *, settings: dict, for
             "photoProbability": photo_probability,
             "forcePhoto": force_photo,
             "referenceImageUrl": reference_image_url,
+            "identityPromptPrefix": identity_prompt_prefix,
         },
     )
 
@@ -252,6 +254,16 @@ def _render_companion_vars(text: str, *, companion: str, user_name: str) -> str:
         .replace("{{user.name}}", user_name)
         .replace("{{user}}", user_name)
         .replace("{{char}}", companion)
+    )
+
+
+def _default_identity_prompt_prefix() -> str:
+    return (
+        "The only person in the image is {{companion.name}}. Use the reference image as the identity source. "
+        "Preserve the exact same face, facial structure, hairstyle, hair color, age impression, body type, and overall vibe from the reference image. "
+        "If any scene detail conflicts with the reference person's identity, the reference image wins. "
+        "Do not create a different woman, do not change ethnicity, do not change hairstyle, do not add other people. "
+        "Natural candid smartphone photo for a WeChat Moments post, soft realistic lighting, no text, no watermark."
     )
 
 

@@ -95,6 +95,13 @@ DEFAULT_SETTINGS: dict = {
         "dailyPostProbability": 0.55,
         "photoProbability": 0.45,
         "referenceImageUrl": "https://yzcos-1317705976.cos.ap-singapore.myqcloud.com/reference/my_avatar.jpg",
+        "identityPromptPrefix": (
+            "The only person in the image is {{companion.name}}. Use the reference image as the identity source. "
+            "Preserve the exact same face, facial structure, hairstyle, hair color, age impression, body type, and overall vibe from the reference image. "
+            "If any scene detail conflicts with the reference person's identity, the reference image wins. "
+            "Do not create a different woman, do not change ethnicity, do not change hairstyle, do not add other people. "
+            "Natural candid smartphone photo for a WeChat Moments post, soft realistic lighting, no text, no watermark."
+        ),
     },
     "model": {
         "provider": "deepseek",

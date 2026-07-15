@@ -191,11 +191,13 @@ class MomentsSettings {
     this.photoProbability = 0.45,
     this.referenceImageUrl =
         'https://yzcos-1317705976.cos.ap-singapore.myqcloud.com/reference/my_avatar.jpg',
+    this.identityPromptPrefix = defaultMomentIdentityPromptPrefix,
   });
 
   final double dailyPostProbability;
   final double photoProbability;
   final String referenceImageUrl;
+  final String identityPromptPrefix;
 
   factory MomentsSettings.fromJson(Map<String, dynamic> json) {
     final daily = (json['dailyPostProbability'] as num?)?.toDouble() ?? 0.55;
@@ -207,6 +209,9 @@ class MomentsSettings {
           (json['referenceImageUrl'] ??
                   'https://yzcos-1317705976.cos.ap-singapore.myqcloud.com/reference/my_avatar.jpg')
               .toString(),
+      identityPromptPrefix:
+          (json['identityPromptPrefix'] ?? defaultMomentIdentityPromptPrefix)
+              .toString(),
     );
   }
 
@@ -214,12 +219,14 @@ class MomentsSettings {
     'dailyPostProbability': dailyPostProbability,
     'photoProbability': photoProbability,
     'referenceImageUrl': referenceImageUrl,
+    'identityPromptPrefix': identityPromptPrefix,
   };
 
   MomentsSettings copyWith({
     double? dailyPostProbability,
     double? photoProbability,
     String? referenceImageUrl,
+    String? identityPromptPrefix,
   }) {
     return MomentsSettings(
       dailyPostProbability:
@@ -227,9 +234,17 @@ class MomentsSettings {
       photoProbability:
           photoProbability?.clamp(0.0, 1.0) ?? this.photoProbability,
       referenceImageUrl: referenceImageUrl ?? this.referenceImageUrl,
+      identityPromptPrefix: identityPromptPrefix ?? this.identityPromptPrefix,
     );
   }
 }
+
+const defaultMomentIdentityPromptPrefix =
+    'The only person in the image is {{companion.name}}. Use the reference image as the identity source. '
+    'Preserve the exact same face, facial structure, hairstyle, hair color, age impression, body type, and overall vibe from the reference image. '
+    "If any scene detail conflicts with the reference person's identity, the reference image wins. "
+    'Do not create a different woman, do not change ethnicity, do not change hairstyle, do not add other people. '
+    'Natural candid smartphone photo for a WeChat Moments post, soft realistic lighting, no text, no watermark.';
 
 class ChatContextSettings {
   const ChatContextSettings({
