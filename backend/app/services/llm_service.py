@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import base64
-import mimetypes
 import time
 
 import httpx
 
 from ..config import Settings
+
+
+GROK_REFERENCE_IMAGE_URL = "https://yzcos-1317705976.cos.ap-singapore.myqcloud.com/reference/my_avatar.jpg"
 
 
 class LlmService:
@@ -63,24 +65,20 @@ class LlmService:
                     if text:
                         yield text
 
-    async def generate_image(self, *, prompt: str, bucket: str = "moments", reference_image_url: str = "") -> dict:
+    async def generate_image(self, *, prompt: str, bucket: str = "moments") -> dict:
         if not self.settings.image_api_key:
             return {
                 "imageUrl": "",
                 "provider": {"configured": False, "model": self.settings.image_model},
             }
-        reference_image = await self._reference_image_payload(reference_image_url)
-        mode = "generations"
-        url = self.settings.image_base_url.rstrip("/") + "/images/generations"
+        mode = "edits"
+        url = self.settings.image_base_url.rstrip("/") + "/images/edits"
         payload = {
             "model": self.settings.image_model,
             "prompt": prompt,
+            "image": GROK_REFERENCE_IMAGE_URL,
             "response_format": "b64_json",
         }
-        if reference_image:
-            payload["image"] = reference_image
-        else:
-            payload["n"] = 1
         async with httpx.AsyncClient(timeout=max(self.settings.request_timeout_seconds, 120)) as client:
             response = await client.post(
                 url,
@@ -104,7 +102,7 @@ class LlmService:
                         "model": self.settings.image_model,
                         "remote": False,
                         "mode": mode,
-                        "referenceAttached": bool(reference_image),
+                        "referenceImageUrl": GROK_REFERENCE_IMAGE_URL,
                     },
                 }
             return {
@@ -114,7 +112,7 @@ class LlmService:
                     "model": self.settings.image_model,
                     "remote": True,
                     "mode": mode,
-                    "referenceAttached": bool(reference_image),
+                    "referenceImageUrl": GROK_REFERENCE_IMAGE_URL,
                 },
             }
         if not b64:
@@ -128,7 +126,7 @@ class LlmService:
                 "model": self.settings.image_model,
                 "remote": False,
                 "mode": mode,
-                "referenceAttached": bool(reference_image),
+                "referenceImageUrl": GROK_REFERENCE_IMAGE_URL,
             },
         }
 
@@ -148,40 +146,6 @@ class LlmService:
         target = target_dir / name
         target.write_bytes(image_bytes)
         return f"/uploads/{bucket}/{name}"
-
-    async def _reference_image_payload(self, source: str) -> str:
-        value = source.strip()
-        if not value:
-            return ""
-        if value.startswith("data:image/"):
-            return value
-        if value.startswith("http://") or value.startswith("https://"):
-            return await self._remote_image_data_url(value)
-        from pathlib import Path
-
-        path = self._resolve_reference_image_path(value)
-        if not path.exists() or not path.is_file():
-            return ""
-        mime = mimetypes.guess_type(path.name)[0] or "image/png"
-        return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
-
-    def _resolve_reference_image_path(self, value: str):
-        from pathlib import Path
-
-        if value.startswith("/uploads/"):
-            return self.settings.upload_dir / value.removeprefix("/uploads/")
-        return Path(value).expanduser()
-
-    async def _remote_image_data_url(self, url: str) -> str:
-        try:
-            async with httpx.AsyncClient(timeout=max(self.settings.request_timeout_seconds, 60)) as client:
-                response = await client.get(url, headers={"User-Agent": "Alicer Moments Image/1.0"})
-                response.raise_for_status()
-        except Exception:
-            return ""
-        content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
-        mime = content_type if content_type.startswith("image/") else mimetypes.guess_type(url)[0]
-        return f"data:{mime or 'image/jpeg'};base64,{base64.b64encode(response.content).decode('ascii')}"
 
     def _payload(self, *, messages: list[dict], model_settings: dict, stream: bool) -> dict:
         return {

@@ -36,7 +36,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoading = true;
   bool _isSaving = false;
   bool _isRestartingBackend = false;
-  bool _isUploadingReference = false;
   String _environmentStatus = '尚未读取';
   String _backendStatus = '未检测';
 
@@ -387,8 +386,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _ReferenceImagePicker(
                     apiBaseUrl: _settings.apiBaseUrl,
                     imageUrl: _settings.moments.referenceImageUrl,
-                    isUploading: _isUploadingReference,
-                    onTap: _isUploadingReference ? null : _pickReferenceImage,
+                    isUploading: false,
+                    onTap: null,
                   ),
                   const SizedBox(height: 8),
                   _ActionRow(
@@ -732,52 +731,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await SettingsStore.save(_settings);
   }
 
-  Future<void> _pickReferenceImage() async {
-    final picked = await _imagePicker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1400,
-      imageQuality: 92,
-    );
-    if (picked == null) return;
-    final file = File(picked.path);
-    final bytes = await file.readAsBytes();
-    final apiBase =
-        _apiBaseController.text.trim().isEmpty
-            ? _settings.apiBaseUrl
-            : _apiBaseController.text.trim().replaceAll(RegExp(r'/$'), '');
-    setState(() => _isUploadingReference = true);
-    try {
-      final response = await ApiClient(baseUrl: apiBase).postImageData(
-        '/api/moments/reference-image',
-        bytes: bytes,
-        filename: p.basename(picked.path),
-        mimeType: _mimeTypeForPath(picked.path),
-      );
-      final imageUrl = (response['imageUrl'] ?? '').toString();
-      if (imageUrl.isEmpty) {
-        throw const ApiException(statusCode: 500, message: 'missing imageUrl');
-      }
-      final next = _settings.copyWith(
-        apiBaseUrl: apiBase,
-        moments: _settings.moments.copyWith(referenceImageUrl: imageUrl),
-      );
-      setState(() => _settings = next);
-      await SettingsStore.save(next);
-      await ChatRepository(settings: next).syncSettings();
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('朋友圈人物参考图已上传')));
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('参考图上传失败：$error')));
-    } finally {
-      if (mounted) setState(() => _isUploadingReference = false);
-    }
-  }
-
   Future<void> _editMomentIdentityPrompt() async {
     final controller = TextEditingController(
       text: _settings.moments.identityPromptPrefix,
@@ -948,16 +901,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) setState(() => _isRestartingBackend = false);
     }
   }
-}
-
-String _mimeTypeForPath(String path) {
-  final ext = p.extension(path).toLowerCase();
-  return switch (ext) {
-    '.jpg' || '.jpeg' => 'image/jpeg',
-    '.png' => 'image/png',
-    '.webp' => 'image/webp',
-    _ => 'image/jpeg',
-  };
 }
 
 class _SettingsHero extends StatelessWidget {
@@ -1460,12 +1403,15 @@ class _ReferenceImagePicker extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('人物参考图', style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    '固定人物参考图',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 3),
                   Text(
                     imageUrl.isEmpty
-                        ? '上传伴侣照片，用于朋友圈照片身份保持。'
-                        : '已设置，生成照片时会作为身份参考。',
+                        ? '后端会使用固定参考图生成照片。'
+                        : '后端会直接把这个 URL 作为 Grok image edit 参考图。',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   if (imageUrl.isNotEmpty) ...[
@@ -1487,7 +1433,7 @@ class _ReferenceImagePicker extends StatelessWidget {
                   height: 22,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-                : const Icon(Icons.upload_file_rounded),
+                : const Icon(Icons.lock_outline_rounded),
           ],
         ),
       ),

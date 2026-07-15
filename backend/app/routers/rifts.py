@@ -8,7 +8,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 
 from ..db import Database
-from ..services.llm_service import LlmService
+from ..services.llm_service import GROK_REFERENCE_IMAGE_URL, LlmService
 from ..services.prompt_service import merge_settings
 
 
@@ -456,7 +456,11 @@ def create_rifts_router(db: Database, llm: LlmService) -> APIRouter:
                 "status": status,
                 "turnCount": next_turn,
                 "stats": stats,
-                "summary": _merge_summary(scenario.get("summary"), generated.get("summaryPatch")),
+                "summary": (
+                    _ending_summary(generated.get("summaryPatch"), ending_type)
+                    if status == "ended"
+                    else _merge_summary(scenario.get("summary"), generated.get("summaryPatch"))
+                ),
                 "currentChoices": current_choices,
                 "endingType": ending_type,
             },
@@ -682,8 +686,12 @@ async def _generate_ending(
         (
             "返回 JSON，字段：scene,aiDialogue,stateDelta,summaryPatch。"
             "这是终局，不再给 choices。必须回应用户最后的选择，并收束核心冲突。"
-            f"结局名是“{_ending_name(ending_type)}”，scene 和 summaryPatch 都要自然写明这个中文结局名。"
-            f"故事目标长度是 {target_turns} 轮；终局必须承接已发生剧情，写出选择导致的结果，不要突然机械完结。"
+            f"结局名是“{_ending_name(ending_type)}”，scene 可以自然写明这个中文结局名。"
+            f"故事目标长度是 {target_turns} 轮；终局必须承接已发生剧情，写出最后选择导致的结果，不要突然机械完结。"
+            "scene 只写终局当下的一小段，不要从第一幕开始复述。"
+            "summaryPatch 是展示在结局名下方的最终结语，只能 1-2 句，不超过 70 个中文字符，不要复述完整剧情。"
+            "如果是圆满、真相相守、甜蜜、携手逃亡等正向结局，summaryPatch 写一句祝福或余韵，例如有情人终成眷属。"
+            "如果是悲剧、背离、失控等负向结局，summaryPatch 用一句话暗示原因或教训，例如不要轻信陌生人。"
             "她称呼用户时只能使用 scenario 中已给定的用户名字或亲密称呼，不得另起新姓名。"
             "不得把产品名“时空裂隙”或“裂隙”写进剧情。"
             "可以苦甜，但不要草率；不要暴露 hidden 字段名。"
@@ -893,6 +901,32 @@ def _merge_summary(current: object, patch: object) -> str:
     return merged[-1600:]
 
 
+def _ending_summary(patch: object, ending_type: str) -> str:
+    text = re.sub(r"\s+", "", str(patch or "").strip())
+    if text:
+        parts = re.findall(r"[^。！？!?]+[。！？!?]?", text)
+        text = "".join(parts[:2]).strip()
+    if not text:
+        text = _fallback_ending_summary(ending_type)
+    if len(text) > 70:
+        text = text[:69].rstrip("，、；：,. ") + "…"
+    return text
+
+
+def _fallback_ending_summary(ending_type: str) -> str:
+    if ending_type in {"romance_happy_ending", "true_ending", "sweet_ending", "escape_ending"}:
+        return "愿有情人终成眷属，从此并肩走向下一程。"
+    if ending_type == "bittersweet_ending":
+        return "有些告别也是守护，愿你们都记得曾经真心相待。"
+    if ending_type == "betrayal_ending":
+        return "背叛往往始于轻信，别把真心交给看不清的人。"
+    if ending_type == "collapse_ending":
+        return "失控并非一瞬造成，越危险时越要守住清醒。"
+    if ending_type == "tragic_ending":
+        return "悲剧多半藏在迟疑与误信里，下一次别再错过真相。"
+    return "故事到此落幕，愿你记得最后一次选择的重量。"
+
+
 def _clean(value: object, fallback: str) -> str:
     text = str(value or "").strip()
     return text or fallback
@@ -918,7 +952,7 @@ async def _generate_rift_image(
     user_name: str,
 ) -> dict:
     moments_settings = settings.get("moments") or {}
-    reference_image_url = str(moments_settings.get("referenceImageUrl") or "").strip()
+    reference_image_url = GROK_REFERENCE_IMAGE_URL
     identity_prompt_prefix = _render_companion_vars(
         str(moments_settings.get("identityPromptPrefix") or "").strip() or _default_identity_prompt_prefix(),
         companion=companion,
@@ -930,6 +964,8 @@ async def _generate_rift_image(
         f"Cinematic still from an immersive romance visual novel. {companion} appears alone in the scene as "
         f"the heroine of a {genre} story, surface relationship: {surface_relation}, story intensity: {intensity}. "
         f"Scene mood and setting: {scene[:500]}. "
+        "Keep the heroine's face, facial structure, hairstyle, hair color, age impression, body type, and overall vibe exactly consistent with the reference image. "
+        "If the story setting or costume conflicts with the reference person's identity, preserve the reference face and hairstyle first. "
         "Make it a dramatic wide background image suitable for a mobile story screen, strong atmosphere, "
         "clear subject, tasteful composition, no text, no watermark, no extra people. "
         f"Do not depict {user_name} unless the reference image is that person; this still is focused on {companion}."
@@ -938,7 +974,6 @@ async def _generate_rift_image(
         return await llm.generate_image(
             prompt=prompt,
             bucket="rifts",
-            reference_image_url=reference_image_url,
         )
     except Exception as exc:
         return {

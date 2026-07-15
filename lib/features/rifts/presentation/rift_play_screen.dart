@@ -216,7 +216,7 @@ class _RiftBodyState extends State<_RiftBody> {
         SafeArea(
           child: Column(
             children: [
-              const SizedBox(height: 42),
+              const SizedBox(height: 12),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Row(

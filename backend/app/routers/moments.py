@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException
 
 from ..db import Database
-from ..services.llm_service import LlmService
+from ..services.llm_service import GROK_REFERENCE_IMAGE_URL, LlmService
 from ..services.prompt_service import merge_settings
 
 
@@ -188,7 +188,7 @@ async def _generate_moment(
     user_name = str(((settings.get("companion") or {}).get("userName") or "用户")).strip() or "用户"
     moments_settings = settings.get("moments") or {}
     photo_probability = _probability(moments_settings.get("photoProbability"), default=0.45)
-    reference_image_url = str(moments_settings.get("referenceImageUrl") or "").strip()
+    reference_image_url = GROK_REFERENCE_IMAGE_URL
     identity_prompt_prefix = _render_companion_vars(
         str(moments_settings.get("identityPromptPrefix") or "").strip() or _default_identity_prompt_prefix(),
         companion=companion,
@@ -242,7 +242,6 @@ async def _generate_moment(
                 f"Scene: {image_prompt}"
             ),
             bucket="moments",
-            reference_image_url=reference_image_url,
         )
     return db.add_moment(
         moment_id=f"mom_{uuid.uuid4().hex}",
