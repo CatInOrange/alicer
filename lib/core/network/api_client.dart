@@ -91,6 +91,13 @@ class ApiClient {
     return _decodeResponse(response);
   }
 
+  Future<Map<String, dynamic>> deleteJson(String path) async {
+    final response = await _httpClient
+        .delete(uri(path), headers: {'Accept': 'application/json'})
+        .timeout(const Duration(seconds: 30));
+    return _decodeResponse(response);
+  }
+
   Future<http.StreamedResponse> postStream(
     String path,
     Map<String, dynamic> body,

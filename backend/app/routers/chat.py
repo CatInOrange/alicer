@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from fastapi import APIRouter
@@ -8,6 +9,7 @@ from pydantic import BaseModel
 
 from ..db import Database
 from ..services.llm_service import LlmService
+from ..services.memory_service import maybe_process_memory_queue, memory_trigger_type, recall_memories
 from ..services.prompt_service import merge_settings, render_prompt
 from ..services.weather_service import enrich_weather
 
@@ -38,7 +40,7 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
         settings = merge_settings(request.settings or db.get_settings())
         environment = await enrich_weather(request.environment)
         recent = db.list_messages(limit=300)
-        memories = db.list_memories(limit=30)
+        memories = recall_memories(db, text=text, limit=30)
         messages, prompt_debug = render_prompt(
             settings=settings,
             recent_messages=recent,
@@ -51,6 +53,13 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
             role="assistant",
             content=reply,
             metadata={"promptDebug": prompt_debug},
+        )
+        _queue_memory_extraction(
+            db,
+            llm,
+            settings=settings,
+            user_message=user_message,
+            assistant_message=assistant_message,
         )
         return {
             "userMessage": user_message,
@@ -85,7 +94,7 @@ async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
         settings = merge_settings(request.settings or db.get_settings())
         environment = await enrich_weather(request.environment)
         recent = db.list_messages(limit=300)
-        memories = db.list_memories(limit=30)
+        memories = recall_memories(db, text=text, limit=30)
         messages, prompt_debug = render_prompt(
             settings=settings,
             recent_messages=recent,
@@ -101,6 +110,13 @@ async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
             role="assistant",
             content=full_reply.strip(),
             metadata={"promptDebug": prompt_debug},
+        )
+        _queue_memory_extraction(
+            db,
+            llm,
+            settings=settings,
+            user_message=user_message,
+            assistant_message=assistant_message,
         )
         yield _sse(
             "final",
@@ -118,3 +134,36 @@ def _sse(event: str, payload: dict) -> str:
     import json
 
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _queue_memory_extraction(
+    db: Database,
+    llm: LlmService,
+    *,
+    settings: dict,
+    user_message: dict,
+    assistant_message: dict,
+) -> None:
+    if (settings.get("memory") or {}).get("autoExtract") is False:
+        return
+    trigger = memory_trigger_type(str(user_message.get("content") or ""))
+    db.enqueue_memory_message(
+        message_id=str(user_message["id"]),
+        role="user",
+        content=str(user_message.get("content") or ""),
+        trigger_type=trigger,
+    )
+    db.enqueue_memory_message(
+        message_id=str(assistant_message["id"]),
+        role="assistant",
+        content=str(assistant_message.get("content") or ""),
+        trigger_type=trigger,
+    )
+    asyncio.create_task(
+        maybe_process_memory_queue(
+            db,
+            llm,
+            settings=settings,
+            force=trigger == "explicit",
+        )
+    )

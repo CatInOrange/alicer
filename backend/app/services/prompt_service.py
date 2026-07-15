@@ -58,6 +58,7 @@ def render_prompt(
         "messagesCount": len(history) + 1,
         "historyCount": len(history),
         "historyMode": (settings.get("chatContext") or {}).get("historyMode") or "all",
+        "memoryIds": [item.get("id") for item in memories if item.get("id")],
     }
 
 
@@ -78,7 +79,7 @@ def _build_variables(*, settings: dict, recent_messages: list[dict], memories: l
         ) or "暂无短期记忆。"
     long_term = ""
     if memory.get("longTerm", True):
-        long_term = "\n".join(f"- {item['content']}" for item in memories[:20]) or "暂无长期记忆。"
+        long_term = _format_memories(memories[:24])
     return {
         "companion.name": str(companion.get("name") or "Alice"),
         "user.name": str(companion.get("userName") or "你"),
@@ -111,6 +112,29 @@ def _select_prompt_history(*, settings: dict, recent_messages: list[dict]) -> li
     elif mode == "recent":
         messages = messages[-recent_limit:]
     return messages[-max_limit:]
+
+
+def _format_memories(memories: list[dict]) -> str:
+    if not memories:
+        return "暂无长期记忆。"
+    labels = {
+        "fact": "事实",
+        "preference": "偏好",
+        "relationship": "关系",
+        "state": "近期状态",
+        "self_life": "她自己的生活",
+    }
+    grouped: dict[str, list[str]] = {}
+    for item in memories:
+        kind = str(item.get("kind") or "fact")
+        label = labels.get(kind, kind)
+        subject = str(item.get("subject") or "").strip()
+        prefix = f"{subject}: " if subject and subject not in {"user", "relationship"} else ""
+        grouped.setdefault(label, []).append(f"- {prefix}{item.get('content')}")
+    sections = []
+    for label, lines in grouped.items():
+        sections.append(label + "：\n" + "\n".join(lines[:8]))
+    return "\n".join(sections)
 
 
 def _clamp_int(value: object, *, default: int, minimum: int, maximum: int) -> int:

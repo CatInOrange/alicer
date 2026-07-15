@@ -14,6 +14,7 @@ import '../../environment/application/environment_service.dart';
 import '../data/settings_store.dart';
 import '../domain/app_settings.dart';
 import 'app_update_screen.dart';
+import 'memory_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -285,6 +286,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         (value) => _setMemory(
                           _settings.memory.copyWith(reviewBeforeSave: value),
                         ),
+                  ),
+                  _ActionRow(
+                    icon: Icons.library_books_outlined,
+                    title: '记忆管理',
+                    subtitle: '查看、确认、编辑、归档她记住的事情。',
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (context) => const MemoryScreen(),
+                        ),
+                      );
+                    },
                   ),
                   _HistoryModeRow(
                     value: _settings.chatContext.historyMode,

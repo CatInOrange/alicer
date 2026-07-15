@@ -52,12 +52,47 @@ class Database:
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY,
                     kind TEXT NOT NULL,
+                    subject TEXT NOT NULL DEFAULT 'user',
                     content TEXT NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
                     tags_json TEXT NOT NULL DEFAULT '[]',
+                    confidence REAL NOT NULL DEFAULT 0.7,
+                    importance REAL NOT NULL DEFAULT 0.5,
+                    status TEXT NOT NULL DEFAULT 'active',
                     enabled INTEGER NOT NULL DEFAULT 1,
+                    pinned INTEGER NOT NULL DEFAULT 0,
+                    sensitive INTEGER NOT NULL DEFAULT 0,
+                    source_json TEXT NOT NULL DEFAULT '{}',
+                    expires_at REAL,
+                    last_used_at REAL,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_memories_status_kind
+                ON memories(status, kind, enabled, importance DESC, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS memory_events (
+                    id TEXT PRIMARY KEY,
+                    memory_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    before_json TEXT NOT NULL DEFAULT '{}',
+                    after_json TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_memory_events_memory
+                ON memory_events(memory_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS memory_queue (
+                    message_id TEXT PRIMARY KEY,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    trigger_type TEXT NOT NULL DEFAULT 'batch',
+                    processed INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL,
+                    processed_at REAL
+                );
+                CREATE INDEX IF NOT EXISTS idx_memory_queue_pending
+                ON memory_queue(processed, created_at);
 
                 CREATE TABLE IF NOT EXISTS diary_entries (
                     id TEXT PRIMARY KEY,
@@ -107,6 +142,31 @@ class Database:
                 ON moment_comments(moment_id, created_at, id);
                 """
             )
+            self._ensure_columns(
+                conn,
+                "memories",
+                {
+                    "subject": "TEXT NOT NULL DEFAULT 'user'",
+                    "summary": "TEXT NOT NULL DEFAULT ''",
+                    "confidence": "REAL NOT NULL DEFAULT 0.7",
+                    "importance": "REAL NOT NULL DEFAULT 0.5",
+                    "status": "TEXT NOT NULL DEFAULT 'active'",
+                    "pinned": "INTEGER NOT NULL DEFAULT 0",
+                    "sensitive": "INTEGER NOT NULL DEFAULT 0",
+                    "source_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "expires_at": "REAL",
+                    "last_used_at": "REAL",
+                },
+            )
+
+    def _ensure_columns(self, conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+        existing = {
+            str(row["name"])
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        for name, ddl in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
     def get_settings(self) -> dict | None:
         with self.connect() as conn:
@@ -228,28 +288,241 @@ class Database:
             "metadata": json.loads(row["metadata_json"] or "{}"),
         }
 
-    def list_memories(self, kind: str | None = None, limit: int = 30) -> list[dict]:
-        query = "SELECT * FROM memories WHERE enabled = 1"
+    def list_memories(
+        self,
+        kind: str | None = None,
+        limit: int = 30,
+        *,
+        status: str | None = "active",
+        include_disabled: bool = False,
+        query_text: str = "",
+    ) -> list[dict]:
+        query = "SELECT * FROM memories WHERE 1=1"
         params: list[object] = []
+        if not include_disabled:
+            query += " AND enabled = 1"
+        if status and status != "all":
+            query += " AND status = ?"
+            params.append(status)
         if kind:
             query += " AND kind = ?"
             params.append(kind)
-        query += " ORDER BY updated_at DESC LIMIT ?"
-        params.append(max(1, min(limit, 100)))
+        if query_text.strip():
+            query += " AND (content LIKE ? OR summary LIKE ? OR tags_json LIKE ?)"
+            needle = f"%{query_text.strip()}%"
+            params.extend([needle, needle, needle])
+        query += " ORDER BY pinned DESC, importance DESC, updated_at DESC LIMIT ?"
+        params.append(max(1, min(limit, 200)))
         with self.connect() as conn:
             rows = conn.execute(query, params).fetchall()
+        return [self._memory_row(row) for row in rows]
+
+    def get_memory(self, memory_id: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        return self._memory_row(row) if row is not None else None
+
+    def upsert_memory(
+        self,
+        *,
+        memory_id: str,
+        kind: str,
+        content: str,
+        subject: str = "user",
+        summary: str = "",
+        tags: list[str] | None = None,
+        confidence: float = 0.7,
+        importance: float = 0.5,
+        status: str = "active",
+        enabled: bool = True,
+        pinned: bool = False,
+        sensitive: bool = False,
+        source: dict | None = None,
+        expires_at: float | None = None,
+    ) -> dict:
+        now = time.time()
+        existing = self.get_memory(memory_id)
+        created_at = float((existing or {}).get("createdAt") or now)
+        before = existing or {}
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memories(
+                    id, kind, subject, content, summary, tags_json, confidence,
+                    importance, status, enabled, pinned, sensitive, source_json,
+                    expires_at, last_used_at, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    kind=excluded.kind,
+                    subject=excluded.subject,
+                    content=excluded.content,
+                    summary=excluded.summary,
+                    tags_json=excluded.tags_json,
+                    confidence=excluded.confidence,
+                    importance=excluded.importance,
+                    status=excluded.status,
+                    enabled=excluded.enabled,
+                    pinned=excluded.pinned,
+                    sensitive=excluded.sensitive,
+                    source_json=excluded.source_json,
+                    expires_at=excluded.expires_at,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    memory_id,
+                    kind,
+                    subject,
+                    content,
+                    summary,
+                    json.dumps(tags or [], ensure_ascii=False),
+                    max(0.0, min(1.0, float(confidence))),
+                    max(0.0, min(1.0, float(importance))),
+                    status,
+                    1 if enabled else 0,
+                    1 if pinned else 0,
+                    1 if sensitive else 0,
+                    json.dumps(source or {}, ensure_ascii=False),
+                    expires_at,
+                    (existing or {}).get("lastUsedAt"),
+                    created_at,
+                    now,
+                ),
+            )
+        item = self.get_memory(memory_id) or {}
+        self.add_memory_event(
+            memory_id=memory_id,
+            action="update" if existing else "create",
+            before=before,
+            after=item,
+        )
+        return item
+
+    def update_memory(self, memory_id: str, updates: dict) -> dict | None:
+        current = self.get_memory(memory_id)
+        if current is None:
+            return None
+        next_item = {**current, **updates}
+        return self.upsert_memory(
+            memory_id=memory_id,
+            kind=str(next_item.get("kind") or "fact"),
+            subject=str(next_item.get("subject") or "user"),
+            content=str(next_item.get("content") or ""),
+            summary=str(next_item.get("summary") or ""),
+            tags=[str(item) for item in (next_item.get("tags") or [])],
+            confidence=float(next_item.get("confidence") or 0.7),
+            importance=float(next_item.get("importance") or 0.5),
+            status=str(next_item.get("status") or "active"),
+            enabled=bool(next_item.get("enabled", True)),
+            pinned=bool(next_item.get("pinned", False)),
+            sensitive=bool(next_item.get("sensitive", False)),
+            source=dict(next_item.get("source") or {}),
+            expires_at=next_item.get("expiresAt"),
+        )
+
+    def add_memory_event(
+        self,
+        *,
+        memory_id: str,
+        action: str,
+        before: dict | None = None,
+        after: dict | None = None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_events(id, memory_id, action, before_json, after_json, created_at)
+                VALUES(?,?,?,?,?,?)
+                """,
+                (
+                    f"mev_{time.time_ns()}",
+                    memory_id,
+                    action,
+                    json.dumps(before or {}, ensure_ascii=False),
+                    json.dumps(after or {}, ensure_ascii=False),
+                    time.time(),
+                ),
+            )
+
+    def enqueue_memory_message(self, *, message_id: str, role: str, content: str, trigger_type: str) -> None:
+        if not content.strip():
+            return
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO memory_queue(message_id, role, content, trigger_type, processed, created_at)
+                VALUES(?,?,?,?,0,?)
+                """,
+                (message_id, role, content, trigger_type, time.time()),
+            )
+
+    def list_pending_memory_queue(self, *, limit: int = 60) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT message_id, role, content, trigger_type, created_at
+                FROM memory_queue
+                WHERE processed = 0
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 120)),),
+            ).fetchall()
         return [
             {
-                "id": row["id"],
-                "kind": row["kind"],
+                "messageId": row["message_id"],
+                "role": row["role"],
                 "content": row["content"],
-                "tags": json.loads(row["tags_json"] or "[]"),
-                "enabled": bool(row["enabled"]),
+                "triggerType": row["trigger_type"],
                 "createdAt": row["created_at"],
-                "updatedAt": row["updated_at"],
             }
             for row in rows
         ]
+
+    def count_pending_memory_queue(self) -> int:
+        with self.connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM memory_queue WHERE processed = 0").fetchone()
+        return int(row["count"] if row else 0)
+
+    def mark_memory_queue_processed(self, message_ids: list[str]) -> None:
+        if not message_ids:
+            return
+        with self.connect() as conn:
+            placeholders = ",".join("?" for _ in message_ids)
+            conn.execute(
+                f"UPDATE memory_queue SET processed = 1, processed_at = ? WHERE message_id IN ({placeholders})",
+                [time.time(), *message_ids],
+            )
+
+    def mark_memories_used(self, memory_ids: list[str]) -> None:
+        if not memory_ids:
+            return
+        with self.connect() as conn:
+            placeholders = ",".join("?" for _ in memory_ids)
+            conn.execute(
+                f"UPDATE memories SET last_used_at = ? WHERE id IN ({placeholders})",
+                [time.time(), *memory_ids],
+            )
+
+    def _memory_row(self, row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "kind": row["kind"],
+            "subject": row["subject"],
+            "content": row["content"],
+            "summary": row["summary"],
+            "tags": json.loads(row["tags_json"] or "[]"),
+            "confidence": row["confidence"],
+            "importance": row["importance"],
+            "status": row["status"],
+            "enabled": bool(row["enabled"]),
+            "pinned": bool(row["pinned"]),
+            "sensitive": bool(row["sensitive"]),
+            "source": json.loads(row["source_json"] or "{}"),
+            "expiresAt": row["expires_at"],
+            "lastUsedAt": row["last_used_at"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
 
     def list_diary_entries(self, *, kind: str = "day", limit: int = 60) -> list[dict]:
         with self.connect() as conn:
