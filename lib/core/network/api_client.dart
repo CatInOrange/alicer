@@ -46,14 +46,16 @@ class ApiClient {
 
   Future<Map<String, dynamic>> postJson(
     String path,
-    Map<String, dynamic> body,
-  ) async {
+    Map<String, dynamic> body, {
+    Map<String, String>? headers,
+  }) async {
     final response = await _httpClient
         .post(
           uri(path),
           headers: {
             'Accept': 'application/json',
             'Content-Type': 'application/json',
+            ...?headers,
           },
           body: jsonEncode(body),
         )

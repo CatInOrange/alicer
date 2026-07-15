@@ -27,6 +27,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _imagePicker = ImagePicker();
   final _environmentService = EnvironmentService();
   final _apiBaseController = TextEditingController();
+  final _adminTokenController = TextEditingController();
   final _companionNameController = TextEditingController();
   final _userNameController = TextEditingController();
   final _maxTokensController = TextEditingController();
@@ -34,6 +35,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   AlicerSettings _settings = const AlicerSettings();
   bool _isLoading = true;
   bool _isSaving = false;
+  bool _isRestartingBackend = false;
   bool _isUploadingReference = false;
   String _environmentStatus = '尚未读取';
   String _backendStatus = '未检测';
@@ -47,6 +49,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _apiBaseController.dispose();
+    _adminTokenController.dispose();
     _companionNameController.dispose();
     _userNameController.dispose();
     _maxTokensController.dispose();
@@ -64,6 +67,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _applySettings(AlicerSettings settings) {
     _settings = settings;
     _apiBaseController.text = settings.apiBaseUrl;
+    _adminTokenController.text = settings.adminToken;
     _companionNameController.text = settings.companion.name;
     _userNameController.text = settings.companion.userName;
     _maxTokensController.text = settings.model.maxTokens.toString();
@@ -407,6 +411,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     decoration: const InputDecoration(labelText: '后端地址'),
                   ),
                   const SizedBox(height: 12),
+                  TextField(
+                    controller: _adminTokenController,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: '后端管理口令',
+                      helperText: '仅保存在本机，用于重启后端。',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   _ModelSelector(
                     value: _settings.model.model,
                     onChanged: _setModel,
@@ -430,6 +443,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         label: const Text('检测'),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _isRestartingBackend ? null : _restartBackend,
+                      icon:
+                          _isRestartingBackend
+                              ? const SizedBox.square(
+                                dimension: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                              : const Icon(Icons.restart_alt_rounded),
+                      label: Text(_isRestartingBackend ? '后端重启中…' : '重启后端'),
+                    ),
                   ),
                 ],
               ),
@@ -467,6 +497,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _settings.model.maxTokens;
     final next = _settings.copyWith(
       apiBaseUrl: apiBaseUrl.isEmpty ? _settings.apiBaseUrl : apiBaseUrl,
+      adminToken: _adminTokenController.text.trim(),
       companion: _settings.companion.copyWith(
         name:
             _companionNameController.text.trim().isEmpty
@@ -858,6 +889,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _backendStatus = '后端未连接：$error');
+    }
+  }
+
+  Future<void> _restartBackend() async {
+    final token = _adminTokenController.text.trim();
+    if (token.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先填写后端管理口令')));
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('重启后端'),
+            content: const Text('重启期间聊天和朋友圈会短暂断连，确认现在执行吗？'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('取消'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.of(context).pop(true),
+                icon: const Icon(Icons.restart_alt_rounded, size: 18),
+                label: const Text('确认重启'),
+              ),
+            ],
+          ),
+    );
+    if (confirmed != true || !mounted) return;
+    final base =
+        _apiBaseController.text.trim().isEmpty
+            ? _settings.apiBaseUrl
+            : _apiBaseController.text.trim().replaceAll(RegExp(r'/$'), '');
+    final next = _settings.copyWith(apiBaseUrl: base, adminToken: token);
+    setState(() {
+      _settings = next;
+      _isRestartingBackend = true;
+      _backendStatus = '重启请求已提交…';
+    });
+    await SettingsStore.save(next);
+    try {
+      await ApiClient(baseUrl: base).postJson(
+        '/api/admin/restart',
+        const {},
+        headers: {'X-Alicer-Admin-Token': token},
+      );
+      if (!mounted) return;
+      setState(() => _backendStatus = '后端正在重启，稍后自动检测…');
+      await Future<void>.delayed(const Duration(seconds: 3));
+      if (mounted) await _checkBackend();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _backendStatus = '重启失败：$error');
+    } finally {
+      if (mounted) setState(() => _isRestartingBackend = false);
     }
   }
 }

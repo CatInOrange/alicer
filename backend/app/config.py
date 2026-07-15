@@ -29,6 +29,7 @@ class Settings(BaseModel):
     image_model: str = os.environ.get("GROK_IMAGE_MODEL", "grok-imagine-image")
     upload_dir: Path = Path(os.environ.get("ALICER_UPLOAD_DIR", ROOT / "data" / "uploads")).expanduser()
     amap_key: str = os.environ.get("AMAP_KEY", "")
+    admin_token: str = os.environ.get("ALICER_ADMIN_TOKEN", "")
     request_timeout_seconds: float = float(os.environ.get("ALICER_REQUEST_TIMEOUT_SECONDS", "60"))
 
 

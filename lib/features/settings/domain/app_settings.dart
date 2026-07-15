@@ -396,6 +396,7 @@ DeepSeekModelOption deepSeekModelOptionFor(String value) {
 class AlicerSettings {
   const AlicerSettings({
     this.apiBaseUrl = 'https://emo.newthu.com',
+    this.adminToken = '',
     this.companion = const CompanionProfile(),
     this.promptModules = defaultPromptModules,
     this.environment = const EnvironmentToggles(),
@@ -406,6 +407,7 @@ class AlicerSettings {
   });
 
   final String apiBaseUrl;
+  final String adminToken;
   final CompanionProfile companion;
   final List<PromptModule> promptModules;
   final EnvironmentToggles environment;
@@ -417,6 +419,7 @@ class AlicerSettings {
   factory AlicerSettings.fromJson(Map<String, dynamic> json) {
     return AlicerSettings(
       apiBaseUrl: (json['apiBaseUrl'] ?? 'https://emo.newthu.com').toString(),
+      adminToken: (json['adminToken'] ?? '').toString(),
       companion: CompanionProfile.fromJson(
         Map<String, dynamic>.from((json['companion'] as Map?) ?? const {}),
       ),
@@ -445,6 +448,7 @@ class AlicerSettings {
 
   Map<String, dynamic> toJson() => {
     'apiBaseUrl': apiBaseUrl,
+    'adminToken': adminToken,
     'companion': companion.toJson(),
     'promptModules': promptModules.map((item) => item.toJson()).toList(),
     'environment': environment.toJson(),
@@ -466,6 +470,7 @@ class AlicerSettings {
 
   AlicerSettings copyWith({
     String? apiBaseUrl,
+    String? adminToken,
     CompanionProfile? companion,
     List<PromptModule>? promptModules,
     EnvironmentToggles? environment,
@@ -476,6 +481,7 @@ class AlicerSettings {
   }) {
     return AlicerSettings(
       apiBaseUrl: apiBaseUrl ?? this.apiBaseUrl,
+      adminToken: adminToken ?? this.adminToken,
       companion: companion ?? this.companion,
       promptModules: promptModules ?? this.promptModules,
       environment: environment ?? this.environment,

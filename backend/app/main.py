@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import secrets
+import sys
+import threading
+import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -79,7 +84,22 @@ def create_app() -> FastAPI:
     def models() -> dict:
         return {"models": DEEPSEEK_MODELS, "defaultModel": settings.deepseek_model}
 
+    @app.post("/api/admin/restart")
+    def restart_backend(x_alicer_admin_token: str = Header(default="")) -> dict:
+        if settings.admin_token:
+            if not secrets.compare_digest(x_alicer_admin_token, settings.admin_token):
+                raise HTTPException(status_code=403, detail="invalid admin token")
+        else:
+            raise HTTPException(status_code=503, detail="admin restart is not configured")
+        threading.Thread(target=_restart_process_soon, daemon=True).start()
+        return {"ok": True, "message": "restart scheduled"}
+
     return app
 
 
 app = create_app()
+
+
+def _restart_process_soon() -> None:
+    time.sleep(0.5)
+    os.execv(sys.executable, [sys.executable, *sys.argv])

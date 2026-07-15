@@ -157,7 +157,7 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {
         _messages = next;
         _isSending = false;
-        _statusText = environment.label;
+        _statusText = '刚刚在线';
       });
       await _cacheStore.saveMessages(next);
       _scrollToBottom(animated: true);
