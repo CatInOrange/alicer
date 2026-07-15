@@ -14,6 +14,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
 
     expect(find.text('朋友圈'), findsOneWidget);
+    expect(find.text('时空裂隙'), findsOneWidget);
     expect(find.text('时光轮'), findsOneWidget);
   });
 }

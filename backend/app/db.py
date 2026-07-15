@@ -137,6 +137,45 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_moment_comments
                 ON moment_comments(moment_id, created_at, id);
+
+                CREATE TABLE IF NOT EXISTS rift_scenarios (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    genre TEXT NOT NULL,
+                    surface_relation TEXT NOT NULL,
+                    intensity TEXT NOT NULL,
+                    user_role TEXT NOT NULL DEFAULT '',
+                    ai_role TEXT NOT NULL DEFAULT '',
+                    world_setting TEXT NOT NULL DEFAULT '',
+                    core_conflict TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    turn_count INTEGER NOT NULL DEFAULT 0,
+                    stats_json TEXT NOT NULL DEFAULT '{}',
+                    summary TEXT NOT NULL DEFAULT '',
+                    current_choices_json TEXT NOT NULL DEFAULT '[]',
+                    hidden_json TEXT NOT NULL DEFAULT '{}',
+                    ending_type TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_rift_scenarios_updated
+                ON rift_scenarios(updated_at DESC, id DESC);
+
+                CREATE TABLE IF NOT EXISTS rift_events (
+                    id TEXT PRIMARY KEY,
+                    scenario_id TEXT NOT NULL,
+                    turn_index INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    choice_id TEXT NOT NULL DEFAULT '',
+                    choice_text TEXT NOT NULL DEFAULT '',
+                    scene_text TEXT NOT NULL DEFAULT '',
+                    ai_dialogue TEXT NOT NULL DEFAULT '',
+                    state_delta_json TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL,
+                    FOREIGN KEY(scenario_id) REFERENCES rift_scenarios(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_rift_events_scenario
+                ON rift_events(scenario_id, turn_index, created_at, id);
                 """
             )
             self._ensure_columns(
@@ -733,6 +772,195 @@ class Database:
                 (comment_id, moment_id, author, content, parent_id, time.time()),
             )
         return self.get_moment(moment_id)
+
+    def list_rifts(self, *, limit: int = 50) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM rift_scenarios
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 100)),),
+            ).fetchall()
+        return [self._rift_row(row) for row in rows]
+
+    def get_rift(self, scenario_id: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM rift_scenarios WHERE id = ?",
+                (scenario_id,),
+            ).fetchone()
+        return self._rift_row(row) if row is not None else None
+
+    def add_rift(self, *, scenario_id: str, payload: dict) -> dict:
+        now = time.time()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO rift_scenarios(
+                    id, title, genre, surface_relation, intensity, user_role,
+                    ai_role, world_setting, core_conflict, status, turn_count,
+                    stats_json, summary, current_choices_json, hidden_json,
+                    ending_type, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    scenario_id,
+                    payload.get("title") or "未命名裂隙",
+                    payload.get("genre") or "",
+                    payload.get("surfaceRelation") or "",
+                    payload.get("intensity") or "",
+                    payload.get("userRole") or "",
+                    payload.get("aiRole") or "",
+                    payload.get("worldSetting") or "",
+                    payload.get("coreConflict") or "",
+                    payload.get("status") or "active",
+                    int(payload.get("turnCount") or 0),
+                    json.dumps(payload.get("stats") or {}, ensure_ascii=False),
+                    payload.get("summary") or "",
+                    json.dumps(payload.get("currentChoices") or [], ensure_ascii=False),
+                    json.dumps(payload.get("hidden") or {}, ensure_ascii=False),
+                    payload.get("endingType") or "",
+                    now,
+                    now,
+                ),
+            )
+        return self.get_rift(scenario_id) or {}
+
+    def update_rift(self, scenario_id: str, updates: dict) -> dict | None:
+        current = self.get_rift(scenario_id)
+        if current is None:
+            return None
+        next_item = {**current, **updates}
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE rift_scenarios
+                SET title = ?, genre = ?, surface_relation = ?, intensity = ?,
+                    user_role = ?, ai_role = ?, world_setting = ?,
+                    core_conflict = ?, status = ?, turn_count = ?,
+                    stats_json = ?, summary = ?, current_choices_json = ?,
+                    ending_type = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_item.get("title") or "",
+                    next_item.get("genre") or "",
+                    next_item.get("surfaceRelation") or "",
+                    next_item.get("intensity") or "",
+                    next_item.get("userRole") or "",
+                    next_item.get("aiRole") or "",
+                    next_item.get("worldSetting") or "",
+                    next_item.get("coreConflict") or "",
+                    next_item.get("status") or "active",
+                    int(next_item.get("turnCount") or 0),
+                    json.dumps(next_item.get("stats") or {}, ensure_ascii=False),
+                    next_item.get("summary") or "",
+                    json.dumps(next_item.get("currentChoices") or [], ensure_ascii=False),
+                    next_item.get("endingType") or "",
+                    time.time(),
+                    scenario_id,
+                ),
+            )
+        return self.get_rift(scenario_id)
+
+    def delete_rift(self, scenario_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM rift_scenarios WHERE id = ?", (scenario_id,))
+
+    def add_rift_event(
+        self,
+        *,
+        event_id: str,
+        scenario_id: str,
+        turn_index: int,
+        event_type: str,
+        choice_id: str = "",
+        choice_text: str = "",
+        scene_text: str = "",
+        ai_dialogue: str = "",
+        state_delta: dict | None = None,
+    ) -> dict:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO rift_events(
+                    id, scenario_id, turn_index, event_type, choice_id,
+                    choice_text, scene_text, ai_dialogue, state_delta_json,
+                    created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    event_id,
+                    scenario_id,
+                    turn_index,
+                    event_type,
+                    choice_id,
+                    choice_text,
+                    scene_text,
+                    ai_dialogue,
+                    json.dumps(state_delta or {}, ensure_ascii=False),
+                    time.time(),
+                ),
+            )
+        return self.get_rift_event(event_id) or {}
+
+    def get_rift_event(self, event_id: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM rift_events WHERE id = ?", (event_id,)).fetchone()
+        return self._rift_event_row(row) if row is not None else None
+
+    def list_rift_events(self, scenario_id: str, *, limit: int = 200) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM rift_events
+                WHERE scenario_id = ?
+                ORDER BY turn_index ASC, created_at ASC, id ASC
+                LIMIT ?
+                """,
+                (scenario_id, max(1, min(limit, 300))),
+            ).fetchall()
+        return [self._rift_event_row(row) for row in rows]
+
+    def _rift_row(self, row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "genre": row["genre"],
+            "surfaceRelation": row["surface_relation"],
+            "intensity": row["intensity"],
+            "userRole": row["user_role"],
+            "aiRole": row["ai_role"],
+            "worldSetting": row["world_setting"],
+            "coreConflict": row["core_conflict"],
+            "status": row["status"],
+            "turnCount": row["turn_count"],
+            "stats": json.loads(row["stats_json"] or "{}"),
+            "summary": row["summary"],
+            "currentChoices": json.loads(row["current_choices_json"] or "[]"),
+            "hidden": json.loads(row["hidden_json"] or "{}"),
+            "endingType": row["ending_type"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+
+    def _rift_event_row(self, row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "scenarioId": row["scenario_id"],
+            "turnIndex": row["turn_index"],
+            "eventType": row["event_type"],
+            "choiceId": row["choice_id"],
+            "choiceText": row["choice_text"],
+            "sceneText": row["scene_text"],
+            "aiDialogue": row["ai_dialogue"],
+            "stateDelta": json.loads(row["state_delta_json"] or "{}"),
+            "createdAt": row["created_at"],
+        }
 
 
 def uuid_like() -> str:

@@ -17,6 +17,7 @@ from .routers.chat import create_chat_router
 from .routers.diary import create_diary_router, run_diary_scheduler
 from .routers.memories import create_memories_router
 from .routers.moments import create_moments_router, run_moments_scheduler
+from .routers.rifts import create_rifts_router
 from .routers.settings import create_settings_router
 from .services.llm_service import LlmService
 
@@ -55,6 +56,7 @@ def create_app() -> FastAPI:
     app.include_router(create_diary_router(db, llm))
     app.include_router(create_moments_router(db, llm))
     app.include_router(create_memories_router(db, llm))
+    app.include_router(create_rifts_router(db, llm))
     app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
 
     @app.on_event("startup")
