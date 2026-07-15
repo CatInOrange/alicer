@@ -60,7 +60,7 @@ class _TimeScreenState extends State<TimeScreen>
     }
     return Scaffold(
       appBar: AppBar(
-        title: const Text('时光'),
+        title: const Text('时光轮'),
         actions: [
           IconButton(
             tooltip: '生成',

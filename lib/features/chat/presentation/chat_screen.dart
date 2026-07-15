@@ -410,8 +410,8 @@ class _MessageBubble extends StatelessWidget {
                           textColor,
                           parentheticalColor:
                               isUser
-                                  ? const Color(0xFFC9FFF4)
-                                  : colors.textMuted,
+                                  ? const Color(0xFFB8F7ED)
+                                  : Theme.of(context).colorScheme.primary,
                         ),
                         style: TextStyle(color: textColor, height: 1.48),
                       ),
@@ -451,8 +451,9 @@ TextSpan _renderMessageContent(
       TextSpan(
         text: text.substring(match.start, match.end),
         style: TextStyle(
-          color: parentheticalColor.withValues(alpha: 0.78),
+          color: parentheticalColor.withValues(alpha: 0.92),
           fontStyle: FontStyle.italic,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );

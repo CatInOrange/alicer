@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../features/chat/presentation/chat_screen.dart';
+import '../features/discover/presentation/discover_screen.dart';
 import '../features/settings/presentation/settings_screen.dart';
-import '../features/time/presentation/time_screen.dart';
 import 'theme.dart';
 
 class AlicerApp extends StatelessWidget {
@@ -32,8 +32,7 @@ class _AlicerShellState extends State<AlicerShell> {
 
   static const _pages = <Widget>[
     ChatScreen(),
-    MomentsScreen(),
-    TimeScreen(),
+    DiscoverScreen(),
     SettingsScreen(),
   ];
 
@@ -51,14 +50,9 @@ class _AlicerShellState extends State<AlicerShell> {
             label: '聊天',
           ),
           NavigationDestination(
-            icon: Icon(Icons.photo_camera_back_outlined),
-            selectedIcon: Icon(Icons.photo_camera_back),
-            label: '朋友圈',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.auto_stories_outlined),
-            selectedIcon: Icon(Icons.auto_stories),
-            label: '时光',
+            icon: Icon(Icons.explore_outlined),
+            selectedIcon: Icon(Icons.explore),
+            label: '发现',
           ),
           NavigationDestination(
             icon: Icon(Icons.tune_outlined),
