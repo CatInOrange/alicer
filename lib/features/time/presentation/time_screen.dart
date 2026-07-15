@@ -417,9 +417,9 @@ class _MomentCard extends StatelessWidget {
               children: [
                 Text(
                   post.author,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
-                    color: Color(0xFF46669C),
+                    color: colors.userBubble,
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -688,9 +688,9 @@ class _MomentSocialBox extends StatelessWidget {
                   children: [
                     TextSpan(
                       text: comment.author,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w800,
-                        color: Color(0xFF46669C),
+                        color: context.alicerColors.userBubble,
                       ),
                     ),
                     const TextSpan(text: '：'),
