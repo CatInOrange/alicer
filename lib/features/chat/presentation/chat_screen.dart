@@ -88,7 +88,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final pending = ChatMessage(
       id: 'local_pending_${DateTime.now().microsecondsSinceEpoch}',
       role: 'assistant',
-      content: '',
+      content: '正在回复…',
       createdAt: DateTime.now(),
       isPending: true,
     );
@@ -99,23 +99,42 @@ class _ChatScreenState extends State<ChatScreen> {
       _error = null;
     });
     _scrollToBottom(animated: false);
-    await _cacheStore.saveMessages(
-      _messages.where((m) => !m.isPending).toList(),
-      markSynced: false,
-    );
+    await _cacheStore.saveMessages(_messages, markSynced: false);
     try {
       final environment = await _environmentService.collect(
         _settings.environment,
       );
       ChatMessage? reply;
       var visibleText = '';
+      var streamedMessage = pending;
       await for (final event in ChatRepository(
         settings: _settings,
       ).streamMessage(text: text, environment: environment.payload)) {
         if (!mounted) return;
-        if (event.type == 'chunk') {
+        if (event.type == 'start') {
+          final rawUser = event.payload['userMessage'];
+          if (rawUser is Map) {
+            _replaceMessage(
+              userMessage.id,
+              ChatMessage.fromJson(Map<String, dynamic>.from(rawUser)),
+            );
+          }
+          final rawAssistant = event.payload['assistantMessage'];
+          if (rawAssistant is Map) {
+            streamedMessage = ChatMessage.fromJson(
+              Map<String, dynamic>.from(rawAssistant),
+            ).copyWith(
+              content: visibleText.isEmpty ? '正在回复…' : visibleText,
+              isPending: true,
+            );
+            _replaceMessage(pending.id, streamedMessage);
+            await _cacheStore.saveMessages(_messages, markSynced: false);
+          }
+        } else if (event.type == 'chunk') {
           visibleText += (event.payload['delta'] ?? '').toString();
-          _replaceMessage(pending.id, pending.copyWith(content: visibleText));
+          streamedMessage = streamedMessage.copyWith(content: visibleText);
+          _replaceMessage(streamedMessage.id, streamedMessage);
+          await _cacheStore.saveMessage(streamedMessage);
           _followStreamIfNeeded();
         } else if (event.type == 'final') {
           final raw = event.payload['assistantMessage'];
@@ -126,13 +145,13 @@ class _ChatScreenState extends State<ChatScreen> {
           throw Exception(event.payload['error'] ?? 'stream error');
         }
       }
-      reply ??= pending.copyWith(
+      reply ??= streamedMessage.copyWith(
         content: visibleText.isEmpty ? '我刚刚走神了一下，再和我说一遍好不好。' : visibleText,
         isPending: false,
       );
       if (!mounted) return;
       final next = [
-        ..._messages.where((message) => message.id != pending.id),
+        ..._messages.where((message) => message.id != streamedMessage.id),
         reply,
       ];
       setState(() {

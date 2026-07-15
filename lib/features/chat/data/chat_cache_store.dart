@@ -90,6 +90,26 @@ class ChatCacheStore {
     }
   }
 
+  Future<void> saveMessage(
+    ChatMessage message, {
+    bool markSynced = false,
+  }) async {
+    try {
+      final db = await _database();
+      await db.insert(
+        'messages',
+        _toRow(message),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      if (markSynced) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt(_lastSyncKey, DateTime.now().millisecondsSinceEpoch);
+      }
+    } catch (error, stackTrace) {
+      debugPrint('[alicer.cache] save message failed: $error\n$stackTrace');
+    }
+  }
+
   Future<bool> isFresh() async {
     try {
       final prefs = await SharedPreferences.getInstance();

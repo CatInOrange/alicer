@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 
 from fastapi import APIRouter
@@ -88,12 +89,25 @@ async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
         role="user",
         content=text,
     )
-    assistant_id = f"msg_{uuid.uuid4().hex}"
-    yield _sse("start", {"userMessage": user_message, "assistantMessageId": assistant_id})
+    assistant_message = db.add_message(
+        message_id=f"msg_{uuid.uuid4().hex}",
+        role="assistant",
+        content="",
+        metadata={"streamStatus": "streaming"},
+    )
+    assistant_id = str(assistant_message["id"])
+    full_reply = ""
+    prompt_debug: dict = {}
+    completed = False
+    yield _sse("start", {"userMessage": user_message, "assistantMessage": assistant_message})
     try:
         settings = merge_settings(request.settings or db.get_settings())
         environment = await enrich_weather(request.environment)
-        recent = db.list_messages(limit=300)
+        recent = [
+            message
+            for message in db.list_messages(limit=300)
+            if message.get("id") != assistant_id
+        ]
         memories = recall_memories(db, text=text, limit=30)
         messages, prompt_debug = render_prompt(
             settings=settings,
@@ -101,16 +115,24 @@ async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
             memories=memories,
             environment=environment,
         )
-        full_reply = ""
+        last_persisted_at = time.monotonic()
         async for chunk in llm.stream_complete(messages=messages, model_settings=settings.get("model") or {}):
             full_reply += chunk
+            now = time.monotonic()
+            if now - last_persisted_at >= 0.75:
+                db.update_message(
+                    message_id=assistant_id,
+                    content=full_reply,
+                    metadata={"streamStatus": "streaming", "promptDebug": prompt_debug},
+                )
+                last_persisted_at = now
             yield _sse("chunk", {"delta": chunk})
-        assistant_message = db.add_message(
+        assistant_message = db.update_message(
             message_id=assistant_id,
-            role="assistant",
             content=full_reply.strip(),
-            metadata={"promptDebug": prompt_debug},
-        )
+            metadata={"streamStatus": "complete", "promptDebug": prompt_debug},
+        ) or assistant_message
+        completed = True
         _queue_memory_extraction(
             db,
             llm,
@@ -126,8 +148,33 @@ async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
                 "promptDebug": prompt_debug,
             },
         )
+    except asyncio.CancelledError:
+        db.update_message(
+            message_id=assistant_id,
+            content=full_reply,
+            metadata={"streamStatus": "interrupted", "promptDebug": prompt_debug},
+        )
+        completed = True
+        raise
     except Exception as exc:  # noqa: BLE001
+        db.update_message(
+            message_id=assistant_id,
+            content=full_reply,
+            metadata={
+                "streamStatus": "error",
+                "streamError": str(exc),
+                "promptDebug": prompt_debug,
+            },
+        )
+        completed = True
         yield _sse("error", {"error": str(exc)})
+    finally:
+        if not completed and full_reply:
+            db.update_message(
+                message_id=assistant_id,
+                content=full_reply,
+                metadata={"streamStatus": "interrupted", "promptDebug": prompt_debug},
+            )
 
 
 def _sse(event: str, payload: dict) -> str:
