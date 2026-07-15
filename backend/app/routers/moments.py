@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import random
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from ..db import Database
 from ..services.llm_service import LlmService
@@ -35,6 +37,33 @@ def create_moments_router(db: Database, llm: LlmService) -> APIRouter:
             force_photo=payload.get("forcePhoto") is True,
         )
         return {"created": True, "moment": moment}
+
+    @router.post("/moments/reference-image")
+    def upload_reference_image(body: dict | None = None) -> dict:
+        payload = body or {}
+        raw_data = str(payload.get("data") or "")
+        if "," in raw_data and raw_data.startswith("data:image/"):
+            raw_data = raw_data.split(",", 1)[1]
+        try:
+            image_bytes = base64.b64decode(raw_data, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(status_code=400, detail="invalid image data")
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="empty image data")
+        if len(image_bytes) > 8 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="image is too large")
+        extension = _image_extension(image_bytes)
+        if not extension:
+            raise HTTPException(status_code=400, detail="unsupported image type")
+        target_dir = llm.settings.upload_dir / "reference"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"companion_{uuid.uuid4().hex}{extension}"
+        target = target_dir / filename
+        target.write_bytes(image_bytes)
+        return {
+            "imageUrl": f"/uploads/reference/{filename}",
+            "size": len(image_bytes),
+        }
 
     @router.post("/moments/{moment_id}/like")
     def like(moment_id: str, body: dict | None = None) -> dict:
@@ -77,9 +106,11 @@ def create_moments_router(db: Database, llm: LlmService) -> APIRouter:
 
 async def _generate_moment(db: Database, llm: LlmService, *, settings: dict, force_photo: bool = False) -> dict:
     companion = str(((settings.get("companion") or {}).get("name") or "Alice")).strip() or "Alice"
+    user_name = str(((settings.get("companion") or {}).get("userName") or "用户")).strip() or "用户"
     moments_settings = settings.get("moments") or {}
     photo_probability = _probability(moments_settings.get("photoProbability"), default=0.45)
     reference_image_url = str(moments_settings.get("referenceImageUrl") or "").strip()
+    role_context = _companion_context(settings, companion=companion, user_name=user_name)
     recent = db.list_messages(limit=120)
     recent_text = "\n".join(
         f"- {item['role']}: {item['content'][:300]}" for item in recent[-40:] if item.get("content")
@@ -88,10 +119,14 @@ async def _generate_moment(db: Database, llm: LlmService, *, settings: dict, for
         {
             "role": "system",
             "content": (
-                f"你是{companion}，要写一条微信朋友圈。"
-                "像真实的人，不要像公告；文字有趣、有生活感，允许少量 emoji。"
+                f"你是{companion}，要以自己的身份写一条微信朋友圈，不是替{user_name}发动态。"
+                "你有自己的生活、工作/学习、社交、兴趣和日常安排；如果角色设定没有明确职业，就写通用日常，不要编成用户的单位、公司、岗位、项目或行程。"
+                "最近聊天只能提供情绪、关系氛围和灵感，禁止把用户说过的第一人称经历改写成你的经历。"
+                "不要出现“我在你的公司/单位/项目里”这类混淆身份的内容。"
+                "像真实的人，不要像公告；文字短一点、有生活感，允许少量 emoji。"
                 "输出 JSON：content 是朋友圈正文，imagePrompt 是给图像模型的照片提示词。"
-                "imagePrompt 要描述真实随手拍场景、衣着、光线和动作，不要改变人物身份。"
+                "imagePrompt 只描述你自己的随手拍场景、衣着、光线和动作，不要描述用户，不要出现其他主要人物。"
+                f"\n\n你的稳定角色设定：\n{role_context or '温柔、独立、有自己的日常节奏。'}"
             ),
         },
         {
@@ -108,9 +143,11 @@ async def _generate_moment(db: Database, llm: LlmService, *, settings: dict, for
     if force_photo or random.random() <= photo_probability:
         image = await llm.generate_image(
             prompt=(
-                "Keep the same face and hairstyle, tall slender body with long legs, "
-                "natural candid smartphone photo for a WeChat Moments post, "
-                "soft realistic lighting, no text, no watermark, professional photography. "
+                f"The only person in the image is {companion}. Use the reference image as the identity source. "
+                "Preserve the exact same face, facial structure, hairstyle, hair color, age impression, body type, and overall vibe from the reference image. "
+                "If any scene detail conflicts with the reference person's identity, the reference image wins. "
+                "Do not create a different woman, do not change ethnicity, do not change hairstyle, do not add other people. "
+                "Natural candid smartphone photo for a WeChat Moments post, soft realistic lighting, no text, no watermark. "
                 f"Scene: {image_prompt}"
             ),
             bucket="moments",
@@ -179,6 +216,53 @@ def _probability(value: object, *, default: float) -> float:
     except (TypeError, ValueError):
         parsed = default
     return max(0.0, min(1.0, parsed))
+
+
+def _companion_context(settings: dict, *, companion: str, user_name: str) -> str:
+    modules = [
+        item
+        for item in settings.get("promptModules") or []
+        if isinstance(item, dict) and item.get("enabled") is not False
+    ]
+    modules.sort(key=lambda item: int(item.get("order") or 0))
+    texts: list[str] = []
+    for item in modules:
+        module_id = str(item.get("id") or "")
+        if module_id not in {
+            "role_description",
+            "personality_traits",
+            "long_term_memory",
+        }:
+            continue
+        content = str(item.get("content") or "").strip()
+        if content:
+            texts.append(
+                _render_companion_vars(
+                    content,
+                    companion=companion,
+                    user_name=user_name,
+                )[:700]
+            )
+    return "\n".join(texts)[:1800]
+
+
+def _render_companion_vars(text: str, *, companion: str, user_name: str) -> str:
+    return (
+        text.replace("{{companion.name}}", companion)
+        .replace("{{user.name}}", user_name)
+        .replace("{{user}}", user_name)
+        .replace("{{char}}", companion)
+    )
+
+
+def _image_extension(image_bytes: bytes) -> str:
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        return ".webp"
+    return ""
 
 
 def _seed_moment(db: Database) -> dict:

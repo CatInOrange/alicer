@@ -61,6 +61,19 @@ class ApiClient {
     return _decodeResponse(response);
   }
 
+  Future<Map<String, dynamic>> postImageData(
+    String path, {
+    required Uint8List bytes,
+    required String filename,
+    required String mimeType,
+  }) {
+    return postJson(path, {
+      'filename': filename,
+      'mimeType': mimeType,
+      'data': base64Encode(bytes),
+    });
+  }
+
   Future<Map<String, dynamic>> putJson(
     String path,
     Map<String, dynamic> body,

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -32,6 +33,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   AlicerSettings _settings = const AlicerSettings();
   bool _isLoading = true;
   bool _isSaving = false;
+  bool _isUploadingReference = false;
   String _environmentStatus = '尚未读取';
   String _backendStatus = '未检测';
 
@@ -351,7 +353,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     icon: Icons.image_outlined,
                     title: '朋友圈带照片概率',
                     subtitle:
-                        '${(_settings.moments.photoProbability * 100).round()}% · 命中时用晚秋参考图走 Grok 图片编辑保持人物一致。',
+                        '${(_settings.moments.photoProbability * 100).round()}% · 命中时用人物参考图保持身份一致。',
                     value: _settings.moments.photoProbability,
                     onChanged: (value) {
                       setState(() {
@@ -363,6 +365,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       });
                       unawaited(SettingsStore.save(_settings));
                     },
+                  ),
+                  const SizedBox(height: 8),
+                  _ReferenceImagePicker(
+                    apiBaseUrl: _settings.apiBaseUrl,
+                    imageUrl: _settings.moments.referenceImageUrl,
+                    isUploading: _isUploadingReference,
+                    onTap: _isUploadingReference ? null : _pickReferenceImage,
                   ),
                 ],
               ),
@@ -672,6 +681,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await SettingsStore.save(_settings);
   }
 
+  Future<void> _pickReferenceImage() async {
+    final picked = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1400,
+      imageQuality: 92,
+    );
+    if (picked == null) return;
+    final file = File(picked.path);
+    final bytes = await file.readAsBytes();
+    final apiBase =
+        _apiBaseController.text.trim().isEmpty
+            ? _settings.apiBaseUrl
+            : _apiBaseController.text.trim().replaceAll(RegExp(r'/$'), '');
+    setState(() => _isUploadingReference = true);
+    try {
+      final response = await ApiClient(baseUrl: apiBase).postImageData(
+        '/api/moments/reference-image',
+        bytes: bytes,
+        filename: p.basename(picked.path),
+        mimeType: _mimeTypeForPath(picked.path),
+      );
+      final imageUrl = (response['imageUrl'] ?? '').toString();
+      if (imageUrl.isEmpty) {
+        throw const ApiException(statusCode: 500, message: 'missing imageUrl');
+      }
+      final next = _settings.copyWith(
+        apiBaseUrl: apiBase,
+        moments: _settings.moments.copyWith(referenceImageUrl: imageUrl),
+      );
+      setState(() => _settings = next);
+      await SettingsStore.save(next);
+      await ChatRepository(settings: next).syncSettings();
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('朋友圈人物参考图已上传')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('参考图上传失败：$error')));
+    } finally {
+      if (mounted) setState(() => _isUploadingReference = false);
+    }
+  }
+
   Future<void> _probeEnvironment() async {
     setState(() => _environmentStatus = '读取中...');
     final snapshot = await _environmentService.collect(_settings.environment);
@@ -698,6 +753,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() => _backendStatus = '后端未连接：$error');
     }
   }
+}
+
+String _mimeTypeForPath(String path) {
+  final ext = p.extension(path).toLowerCase();
+  return switch (ext) {
+    '.jpg' || '.jpeg' => 'image/jpeg',
+    '.png' => 'image/png',
+    '.webp' => 'image/webp',
+    _ => 'image/jpeg',
+  };
 }
 
 class _SettingsHero extends StatelessWidget {
@@ -1159,6 +1224,156 @@ class _AvatarPicker extends StatelessWidget {
             Text('本地缓存', style: Theme.of(context).textTheme.bodySmall),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ReferenceImagePicker extends StatelessWidget {
+  const _ReferenceImagePicker({
+    required this.apiBaseUrl,
+    required this.imageUrl,
+    required this.isUploading,
+    required this.onTap,
+  });
+
+  final String apiBaseUrl;
+  final String imageUrl;
+  final bool isUploading;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: context.alicerColors.border),
+        ),
+        child: Row(
+          children: [
+            _ReferenceImagePreview(
+              apiBaseUrl: apiBaseUrl,
+              imageUrl: imageUrl,
+              size: 72,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('人物参考图', style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 3),
+                  Text(
+                    imageUrl.isEmpty
+                        ? '上传伴侣照片，用于朋友圈照片身份保持。'
+                        : '已设置，生成照片时会作为身份参考。',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  if (imageUrl.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      imageUrl,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            isUploading
+                ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+                : const Icon(Icons.upload_file_rounded),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReferenceImagePreview extends StatefulWidget {
+  const _ReferenceImagePreview({
+    required this.apiBaseUrl,
+    required this.imageUrl,
+    required this.size,
+  });
+
+  final String apiBaseUrl;
+  final String imageUrl;
+  final double size;
+
+  @override
+  State<_ReferenceImagePreview> createState() => _ReferenceImagePreviewState();
+}
+
+class _ReferenceImagePreviewState extends State<_ReferenceImagePreview> {
+  late Future<Uint8List> _imageBytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _imageBytes = _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReferenceImagePreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.apiBaseUrl != widget.apiBaseUrl ||
+        oldWidget.imageUrl != widget.imageUrl) {
+      _imageBytes = _load();
+    }
+  }
+
+  Future<Uint8List> _load() {
+    if (widget.imageUrl.isEmpty) {
+      return Future<Uint8List>.error('empty image url');
+    }
+    return ApiClient(baseUrl: widget.apiBaseUrl).getBytes(widget.imageUrl);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.primary;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: widget.size,
+        height: widget.size,
+        color: color.withValues(alpha: 0.12),
+        child:
+            widget.imageUrl.isEmpty
+                ? Icon(Icons.person_search_rounded, color: color)
+                : FutureBuilder<Uint8List>(
+                  future: _imageBytes,
+                  builder: (context, snapshot) {
+                    if (snapshot.hasData) {
+                      return Image.memory(
+                        snapshot.data!,
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                      );
+                    }
+                    if (snapshot.hasError) {
+                      return Icon(Icons.broken_image_outlined, color: color);
+                    }
+                    return const Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    );
+                  },
+                ),
       ),
     );
   }
