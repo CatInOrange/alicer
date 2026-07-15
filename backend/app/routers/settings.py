@@ -21,7 +21,7 @@ def create_settings_router(db: Database) -> APIRouter:
     @router.post("/prompt/preview")
     def preview(payload: dict) -> dict:
         settings = merge_settings(payload.get("settings") or db.get_settings())
-        messages = db.list_messages(limit=24)
+        messages = db.list_messages(limit=300)
         memories = db.list_memories(limit=30)
         prompt_messages, debug = render_prompt(
             settings=settings,

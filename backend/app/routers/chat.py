@@ -37,7 +37,7 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
         )
         settings = merge_settings(request.settings or db.get_settings())
         environment = await enrich_weather(request.environment)
-        recent = db.list_messages(limit=40)
+        recent = db.list_messages(limit=300)
         memories = db.list_memories(limit=30)
         messages, prompt_debug = render_prompt(
             settings=settings,
@@ -84,7 +84,7 @@ async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
     try:
         settings = merge_settings(request.settings or db.get_settings())
         environment = await enrich_weather(request.environment)
-        recent = db.list_messages(limit=40)
+        recent = db.list_messages(limit=300)
         memories = db.list_memories(limit=30)
         messages, prompt_debug = render_prompt(
             settings=settings,
@@ -95,7 +95,7 @@ async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
         full_reply = ""
         async for chunk in llm.stream_complete(messages=messages, model_settings=settings.get("model") or {}):
             full_reply += chunk
-            yield _sse("chunk", {"delta": chunk, "visibleText": full_reply})
+            yield _sse("chunk", {"delta": chunk})
         assistant_message = db.add_message(
             message_id=assistant_id,
             role="assistant",

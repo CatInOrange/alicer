@@ -186,25 +186,110 @@ class MemoryToggles {
 }
 
 class MomentsSettings {
-  const MomentsSettings({this.dailyPostProbability = 0.55});
+  const MomentsSettings({
+    this.dailyPostProbability = 0.55,
+    this.photoProbability = 0.45,
+    this.referenceImageUrl =
+        'https://yzcos-1317705976.cos.ap-singapore.myqcloud.com/reference/my_avatar.jpg',
+  });
 
   final double dailyPostProbability;
+  final double photoProbability;
+  final String referenceImageUrl;
 
   factory MomentsSettings.fromJson(Map<String, dynamic> json) {
-    final value = (json['dailyPostProbability'] as num?)?.toDouble() ?? 0.55;
-    return MomentsSettings(dailyPostProbability: value.clamp(0.0, 1.0));
+    final daily = (json['dailyPostProbability'] as num?)?.toDouble() ?? 0.55;
+    final photo = (json['photoProbability'] as num?)?.toDouble() ?? 0.45;
+    return MomentsSettings(
+      dailyPostProbability: daily.clamp(0.0, 1.0),
+      photoProbability: photo.clamp(0.0, 1.0),
+      referenceImageUrl:
+          (json['referenceImageUrl'] ??
+                  'https://yzcos-1317705976.cos.ap-singapore.myqcloud.com/reference/my_avatar.jpg')
+              .toString(),
+    );
   }
 
   Map<String, dynamic> toJson() => {
     'dailyPostProbability': dailyPostProbability,
+    'photoProbability': photoProbability,
+    'referenceImageUrl': referenceImageUrl,
   };
 
-  MomentsSettings copyWith({double? dailyPostProbability}) {
+  MomentsSettings copyWith({
+    double? dailyPostProbability,
+    double? photoProbability,
+    String? referenceImageUrl,
+  }) {
     return MomentsSettings(
       dailyPostProbability:
           dailyPostProbability?.clamp(0.0, 1.0) ?? this.dailyPostProbability,
+      photoProbability:
+          photoProbability?.clamp(0.0, 1.0) ?? this.photoProbability,
+      referenceImageUrl: referenceImageUrl ?? this.referenceImageUrl,
     );
   }
+}
+
+class ChatContextSettings {
+  const ChatContextSettings({
+    this.historyMode = 'all',
+    this.recentMessages = 120,
+    this.maxHistoryMessages = 300,
+  });
+
+  final String historyMode;
+  final int recentMessages;
+  final int maxHistoryMessages;
+
+  factory ChatContextSettings.fromJson(Map<String, dynamic> json) {
+    return ChatContextSettings(
+      historyMode: normalizeHistoryMode(
+        (json['historyMode'] ?? 'all').toString(),
+      ),
+      recentMessages: _clampInt(json['recentMessages'], 120, 1, 300),
+      maxHistoryMessages: _clampInt(json['maxHistoryMessages'], 300, 1, 300),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'historyMode': historyMode,
+    'recentMessages': recentMessages,
+    'maxHistoryMessages': maxHistoryMessages,
+  };
+
+  ChatContextSettings copyWith({
+    String? historyMode,
+    int? recentMessages,
+    int? maxHistoryMessages,
+  }) {
+    return ChatContextSettings(
+      historyMode:
+          historyMode == null
+              ? this.historyMode
+              : normalizeHistoryMode(historyMode),
+      recentMessages: _clampInt(recentMessages, this.recentMessages, 1, 300),
+      maxHistoryMessages: _clampInt(
+        maxHistoryMessages,
+        this.maxHistoryMessages,
+        1,
+        300,
+      ),
+    );
+  }
+}
+
+String normalizeHistoryMode(String value) {
+  return switch (value) {
+    'recent' || 'day' || 'month' || 'all' => value,
+    _ => 'all',
+  };
+}
+
+int _clampInt(Object? value, int fallback, int min, int max) {
+  final parsed =
+      value is num ? value.toInt() : int.tryParse(value?.toString() ?? '');
+  return (parsed ?? fallback).clamp(min, max);
 }
 
 class ModelSettings {
@@ -300,6 +385,7 @@ class AlicerSettings {
     this.promptModules = defaultPromptModules,
     this.environment = const EnvironmentToggles(),
     this.memory = const MemoryToggles(),
+    this.chatContext = const ChatContextSettings(),
     this.moments = const MomentsSettings(),
     this.model = const ModelSettings(),
   });
@@ -309,6 +395,7 @@ class AlicerSettings {
   final List<PromptModule> promptModules;
   final EnvironmentToggles environment;
   final MemoryToggles memory;
+  final ChatContextSettings chatContext;
   final MomentsSettings moments;
   final ModelSettings model;
 
@@ -329,6 +416,9 @@ class AlicerSettings {
       memory: MemoryToggles.fromJson(
         Map<String, dynamic>.from((json['memory'] as Map?) ?? const {}),
       ),
+      chatContext: ChatContextSettings.fromJson(
+        Map<String, dynamic>.from((json['chatContext'] as Map?) ?? const {}),
+      ),
       moments: MomentsSettings.fromJson(
         Map<String, dynamic>.from((json['moments'] as Map?) ?? const {}),
       ),
@@ -344,6 +434,7 @@ class AlicerSettings {
     'promptModules': promptModules.map((item) => item.toJson()).toList(),
     'environment': environment.toJson(),
     'memory': memory.toJson(),
+    'chatContext': chatContext.toJson(),
     'moments': moments.toJson(),
     'model': model.toJson(),
   };
@@ -353,6 +444,7 @@ class AlicerSettings {
     'promptModules': promptModules.map((item) => item.toJson()).toList(),
     'environment': environment.toJson(),
     'memory': memory.toJson(),
+    'chatContext': chatContext.toJson(),
     'moments': moments.toJson(),
     'model': model.toJson(),
   };
@@ -363,6 +455,7 @@ class AlicerSettings {
     List<PromptModule>? promptModules,
     EnvironmentToggles? environment,
     MemoryToggles? memory,
+    ChatContextSettings? chatContext,
     MomentsSettings? moments,
     ModelSettings? model,
   }) {
@@ -372,6 +465,7 @@ class AlicerSettings {
       promptModules: promptModules ?? this.promptModules,
       environment: environment ?? this.environment,
       memory: memory ?? this.memory,
+      chatContext: chatContext ?? this.chatContext,
       moments: moments ?? this.moments,
       model: model ?? this.model,
     );

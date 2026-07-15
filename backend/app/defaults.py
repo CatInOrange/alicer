@@ -86,8 +86,15 @@ DEFAULT_SETTINGS: dict = {
         "autoExtract": True,
         "reviewBeforeSave": True,
     },
+    "chatContext": {
+        "historyMode": "all",
+        "recentMessages": 120,
+        "maxHistoryMessages": 300,
+    },
     "moments": {
         "dailyPostProbability": 0.55,
+        "photoProbability": 0.45,
+        "referenceImageUrl": "https://yzcos-1317705976.cos.ap-singapore.myqcloud.com/reference/my_avatar.jpg",
     },
     "model": {
         "provider": "deepseek",

@@ -17,7 +17,94 @@ class TimeScreen extends StatefulWidget {
   State<TimeScreen> createState() => _TimeScreenState();
 }
 
-class _TimeScreenState extends State<TimeScreen> {
+class _TimeScreenState extends State<TimeScreen>
+    with SingleTickerProviderStateMixin {
+  AlicerSettings _settings = const AlicerSettings();
+  final _dayKey = GlobalKey<_DiaryListState>();
+  final _weekKey = GlobalKey<_DiaryListState>();
+  final _monthKey = GlobalKey<_DiaryListState>();
+  late final TabController _tabController;
+  bool _loaded = false;
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 3, vsync: this)..addListener(() {
+      if (!_tabController.indexIsChanging && mounted) setState(() {});
+    });
+    unawaited(_loadSettings());
+  }
+
+  Future<void> _loadSettings() async {
+    final settings = await SettingsStore.load();
+    if (!mounted) return;
+    setState(() {
+      _settings = settings;
+      _loaded = true;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('时光'),
+        actions: [
+          IconButton(
+            tooltip: '生成',
+            onPressed: _generateCurrent,
+            icon: const Icon(Icons.add_rounded),
+          ),
+        ],
+        bottom: TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          tabs: const [Tab(text: '日记'), Tab(text: '周记'), Tab(text: '月记')],
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          DiaryList(key: _dayKey, settings: _settings, kind: 'day'),
+          DiaryList(key: _weekKey, settings: _settings, kind: 'week'),
+          DiaryList(key: _monthKey, settings: _settings, kind: 'month'),
+        ],
+      ),
+    );
+  }
+
+  void _generateCurrent() {
+    switch (_tabController.index) {
+      case 1:
+        _weekKey.currentState?._generateCurrent();
+        return;
+      case 2:
+        _monthKey.currentState?._generateCurrent();
+        return;
+      default:
+        _dayKey.currentState?._generateCurrent();
+    }
+  }
+}
+
+class MomentsScreen extends StatefulWidget {
+  const MomentsScreen({super.key});
+
+  @override
+  State<MomentsScreen> createState() => _MomentsScreenState();
+}
+
+class _MomentsScreenState extends State<MomentsScreen> {
+  final _feedKey = GlobalKey<_MomentsFeedState>();
   AlicerSettings _settings = const AlicerSettings();
   bool _loaded = false;
 
@@ -41,30 +128,18 @@ class _TimeScreenState extends State<TimeScreen> {
     if (!_loaded) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    return DefaultTabController(
-      length: 4,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('时光'),
-          bottom: const TabBar(
-            isScrollable: true,
-            tabs: [
-              Tab(text: '朋友圈'),
-              Tab(text: '日记'),
-              Tab(text: '周记'),
-              Tab(text: '月记'),
-            ],
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('朋友圈'),
+        actions: [
+          IconButton(
+            tooltip: '生成朋友圈',
+            onPressed: () => _feedKey.currentState?._generate(),
+            icon: const Icon(Icons.add_rounded),
           ),
-        ),
-        body: TabBarView(
-          children: [
-            MomentsFeed(settings: _settings),
-            DiaryList(settings: _settings, kind: 'day'),
-            DiaryList(settings: _settings, kind: 'week'),
-            DiaryList(settings: _settings, kind: 'month'),
-          ],
-        ),
+        ],
       ),
+      body: MomentsFeed(key: _feedKey, settings: _settings),
     );
   }
 }
@@ -169,12 +244,10 @@ class _MomentsFeedState extends State<MomentsFeed> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 28),
         children: [
-          _MomentComposer(
-            probability: widget.settings.moments.dailyPostProbability,
-            generating: _generating,
-            onGenerate: _generate,
-          ),
-          const SizedBox(height: 10),
+          if (_generating) ...[
+            const LinearProgressIndicator(minHeight: 2),
+            const SizedBox(height: 12),
+          ],
           for (final post in _moments)
             _MomentCard(
               post: post,
@@ -255,67 +328,15 @@ class _DiaryListState extends State<DiaryList> {
       onRefresh: _load,
       child: ListView.separated(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
-        itemCount: _entries.length + 1,
+        itemCount: _entries.length + (_generating ? 1 : 0),
         separatorBuilder: (_, _) => const SizedBox(height: 12),
         itemBuilder: (context, index) {
-          if (index == 0) {
-            return _DiaryActionCard(
-              kind: widget.kind,
-              generating: _generating,
-              onGenerate: _generateCurrent,
-            );
+          if (_generating && index == 0) {
+            return const LinearProgressIndicator(minHeight: 2);
           }
-          return _DiaryCard(entry: _entries[index - 1]);
+          final entryIndex = _generating ? index - 1 : index;
+          return _DiaryCard(entry: _entries[entryIndex]);
         },
-      ),
-    );
-  }
-}
-
-class _MomentComposer extends StatelessWidget {
-  const _MomentComposer({
-    required this.probability,
-    required this.generating,
-    required this.onGenerate,
-  });
-
-  final double probability;
-  final bool generating;
-  final VoidCallback onGenerate;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.alicerColors;
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        border: Border.all(color: colors.border),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          const Icon(Icons.camera_alt_outlined),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              '伴侣每天发朋友圈概率 ${(probability * 100).round()}%，也可以现在让她发一条。',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-          FilledButton.icon(
-            onPressed: generating ? null : onGenerate,
-            icon:
-                generating
-                    ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                    : const Icon(Icons.auto_awesome_rounded, size: 18),
-            label: const Text('生成'),
-          ),
-        ],
       ),
     );
   }
@@ -492,44 +513,6 @@ class _MomentSocialBox extends StatelessWidget {
                 ),
               ),
             ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DiaryActionCard extends StatelessWidget {
-  const _DiaryActionCard({
-    required this.kind,
-    required this.generating,
-    required this.onGenerate,
-  });
-
-  final String kind;
-  final bool generating;
-  final VoidCallback onGenerate;
-
-  @override
-  Widget build(BuildContext context) {
-    final label =
-        {'day': '今天日记', 'week': '本周周记', 'month': '本月月记'}[kind] ?? '记录';
-    final colors = context.alicerColors;
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: colors.border),
-      ),
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          const Icon(Icons.auto_stories_outlined),
-          const SizedBox(width: 10),
-          Expanded(child: Text('每天 23:00 自动写日记；周末/月末会额外整理周记和月记。')),
-          FilledButton(
-            onPressed: generating ? null : onGenerate,
-            child: Text(generating ? '生成中' : '生成$label'),
-          ),
         ],
       ),
     );

@@ -9,7 +9,7 @@ def merge_settings(stored: dict | None) -> dict:
     if not stored:
         return DEFAULT_SETTINGS
     merged = {**DEFAULT_SETTINGS, **stored}
-    for key in ("companion", "environment", "memory", "moments", "model"):
+    for key in ("companion", "environment", "memory", "chatContext", "moments", "model"):
         merged[key] = {**DEFAULT_SETTINGS.get(key, {}), **stored.get(key, {})}
     if not stored.get("promptModules"):
         merged["promptModules"] = DEFAULT_SETTINGS["promptModules"]
@@ -43,18 +43,21 @@ def render_prompt(
             }
         )
     system_prompt = "\n\n".join(block["content"] for block in rendered_blocks if block["content"])
+    prompt_history = _select_prompt_history(settings=settings, recent_messages=recent_messages)
     history = [
         {
             "role": "assistant" if item["role"] == "assistant" else "user",
             "content": item["content"],
         }
-        for item in recent_messages[-24:]
+        for item in prompt_history
         if item.get("role") in {"user", "assistant"} and item.get("content")
     ]
     return [{"role": "system", "content": system_prompt}, *history], {
         "blocks": rendered_blocks,
         "variables": variables,
         "messagesCount": len(history) + 1,
+        "historyCount": len(history),
+        "historyMode": (settings.get("chatContext") or {}).get("historyMode") or "all",
     }
 
 
@@ -67,9 +70,10 @@ def _build_variables(*, settings: dict, recent_messages: list[dict], memories: l
     weather_text = _format_weather(env) if environment.get("weather") else ""
     short_term = ""
     if memory.get("shortTerm", True):
+        prompt_history = _select_prompt_history(settings=settings, recent_messages=recent_messages)
         short_term = "\n".join(
             f"{item.get('role')}: {item.get('content')}"
-            for item in recent_messages[-8:]
+            for item in prompt_history[-12:]
             if item.get("content")
         ) or "暂无短期记忆。"
     long_term = ""
@@ -85,6 +89,45 @@ def _build_variables(*, settings: dict, recent_messages: list[dict], memories: l
         "memory.long_term": long_term,
         "recent_messages": short_term,
     }
+
+
+def _select_prompt_history(*, settings: dict, recent_messages: list[dict]) -> list[dict]:
+    context = settings.get("chatContext") or {}
+    mode = str(context.get("historyMode") or "all").strip()
+    recent_limit = _clamp_int(context.get("recentMessages"), default=120, minimum=1, maximum=300)
+    max_limit = _clamp_int(context.get("maxHistoryMessages"), default=300, minimum=1, maximum=300)
+    messages = [
+        item
+        for item in recent_messages
+        if item.get("role") in {"user", "assistant"} and item.get("content")
+    ]
+    now = dt.datetime.now().astimezone()
+    if mode == "day":
+        cutoff = now - dt.timedelta(days=1)
+        messages = [item for item in messages if _created_at(item) >= cutoff]
+    elif mode == "month":
+        cutoff = now - dt.timedelta(days=31)
+        messages = [item for item in messages if _created_at(item) >= cutoff]
+    elif mode == "recent":
+        messages = messages[-recent_limit:]
+    return messages[-max_limit:]
+
+
+def _clamp_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _created_at(item: dict) -> dt.datetime:
+    raw = item.get("createdAt")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return dt.datetime.fromtimestamp(0, tz=dt.timezone.utc)
+    return dt.datetime.fromtimestamp(value, tz=dt.timezone.utc).astimezone()
 
 
 def _format_time(env: dict) -> str:

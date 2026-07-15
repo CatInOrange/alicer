@@ -284,6 +284,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           _settings.memory.copyWith(reviewBeforeSave: value),
                         ),
                   ),
+                  _HistoryModeRow(
+                    value: _settings.chatContext.historyMode,
+                    onChanged:
+                        (value) => _setChatContext(
+                          _settings.chatContext.copyWith(historyMode: value),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.format_list_numbered_outlined,
+                    title: '最近条数',
+                    subtitle:
+                        '按最近条数模式时取 ${_settings.chatContext.recentMessages} 条消息。',
+                    value: _settings.chatContext.recentMessages,
+                    min: 10,
+                    max: 300,
+                    divisions: 29,
+                    onChanged:
+                        (value) => _setChatContext(
+                          _settings.chatContext.copyWith(recentMessages: value),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.history_edu_outlined,
+                    title: '上下文上限',
+                    subtitle:
+                        '没超过窗口时尽量保留历史，最多 ${_settings.chatContext.maxHistoryMessages} 条。',
+                    value: _settings.chatContext.maxHistoryMessages,
+                    min: 20,
+                    max: 300,
+                    divisions: 28,
+                    onChanged:
+                        (value) => _setChatContext(
+                          _settings.chatContext.copyWith(
+                            maxHistoryMessages: value,
+                          ),
+                        ),
+                  ),
                 ],
               ),
             ),
@@ -304,6 +341,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         _settings = _settings.copyWith(
                           moments: _settings.moments.copyWith(
                             dailyPostProbability: value,
+                          ),
+                        );
+                      });
+                      unawaited(SettingsStore.save(_settings));
+                    },
+                  ),
+                  _SliderRow(
+                    icon: Icons.image_outlined,
+                    title: '朋友圈带照片概率',
+                    subtitle:
+                        '${(_settings.moments.photoProbability * 100).round()}% · 命中时用晚秋参考图走 Grok 图片编辑保持人物一致。',
+                    value: _settings.moments.photoProbability,
+                    onChanged: (value) {
+                      setState(() {
+                        _settings = _settings.copyWith(
+                          moments: _settings.moments.copyWith(
+                            photoProbability: value,
                           ),
                         );
                       });
@@ -438,6 +492,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _setMemory(MemoryToggles memory) {
     setState(() => _settings = _settings.copyWith(memory: memory));
+    unawaited(SettingsStore.save(_settings));
+  }
+
+  void _setChatContext(ChatContextSettings chatContext) {
+    setState(() => _settings = _settings.copyWith(chatContext: chatContext));
     unawaited(SettingsStore.save(_settings));
   }
 
@@ -954,6 +1013,111 @@ class _SliderRow extends StatelessWidget {
                   onChanged: onChanged,
                 ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _IntSliderRow extends StatelessWidget {
+  const _IntSliderRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.divisions,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final int value;
+  final int min;
+  final int max;
+  final int divisions;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Icon(icon, color: colors.textMuted, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 3),
+                Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+                Slider(
+                  value: value.toDouble().clamp(min.toDouble(), max.toDouble()),
+                  min: min.toDouble(),
+                  max: max.toDouble(),
+                  divisions: divisions,
+                  label: '$value',
+                  onChanged: (next) => onChanged(next.round()),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryModeRow extends StatelessWidget {
+  const _HistoryModeRow({required this.value, required this.onChanged});
+
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Icon(
+              Icons.history_outlined,
+              color: colors.textMuted,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: DropdownButtonFormField<String>(
+              value: normalizeHistoryMode(value),
+              decoration: const InputDecoration(
+                labelText: '聊天历史范围',
+                helperText: '控制 prompt 中带入哪些历史消息。',
+              ),
+              items: const [
+                DropdownMenuItem(value: 'all', child: Text('尽量不裁剪')),
+                DropdownMenuItem(value: 'recent', child: Text('最近若干条')),
+                DropdownMenuItem(value: 'day', child: Text('最近一天')),
+                DropdownMenuItem(value: 'month', child: Text('最近一个月')),
+              ],
+              onChanged: (next) {
+                if (next != null) onChanged(next);
+              },
             ),
           ),
         ],

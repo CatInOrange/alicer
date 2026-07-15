@@ -111,8 +111,7 @@ class _ChatScreenState extends State<ChatScreen> {
       ).streamMessage(text: text, environment: environment.payload)) {
         if (!mounted) return;
         if (event.type == 'chunk') {
-          visibleText =
-              (event.payload['visibleText'] ?? visibleText).toString();
+          visibleText += (event.payload['delta'] ?? '').toString();
           _replaceMessage(pending.id, pending.copyWith(content: visibleText));
           _followStreamIfNeeded();
         } else if (event.type == 'final') {
@@ -382,8 +381,8 @@ class _MessageBubble extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: 6),
-                      Text(
-                        message.content,
+                      Text.rich(
+                        _renderMessageContent(message.content, textColor),
                         style: TextStyle(color: textColor, height: 1.48),
                       ),
                     ],
@@ -404,6 +403,31 @@ class _MessageBubble extends StatelessWidget {
       ),
     );
   }
+}
+
+TextSpan _renderMessageContent(String text, Color color) {
+  final spans = <TextSpan>[];
+  final pattern = RegExp(r'(\([^()\n]{1,80}\)|（[^（）\n]{1,80}）)');
+  var cursor = 0;
+  for (final match in pattern.allMatches(text)) {
+    if (match.start > cursor) {
+      spans.add(TextSpan(text: text.substring(cursor, match.start)));
+    }
+    spans.add(
+      TextSpan(
+        text: text.substring(match.start, match.end),
+        style: TextStyle(
+          color: color.withValues(alpha: 0.58),
+          fontStyle: FontStyle.italic,
+        ),
+      ),
+    );
+    cursor = match.end;
+  }
+  if (cursor < text.length) {
+    spans.add(TextSpan(text: text.substring(cursor)));
+  }
+  return TextSpan(children: spans.isEmpty ? [TextSpan(text: text)] : spans);
 }
 
 class _Composer extends StatelessWidget {

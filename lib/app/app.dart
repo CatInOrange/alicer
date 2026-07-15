@@ -30,7 +30,12 @@ class AlicerShell extends StatefulWidget {
 class _AlicerShellState extends State<AlicerShell> {
   int _currentIndex = 0;
 
-  static const _pages = <Widget>[ChatScreen(), TimeScreen(), SettingsScreen()];
+  static const _pages = <Widget>[
+    ChatScreen(),
+    MomentsScreen(),
+    TimeScreen(),
+    SettingsScreen(),
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -44,6 +49,11 @@ class _AlicerShellState extends State<AlicerShell> {
             icon: Icon(Icons.chat_bubble_outline),
             selectedIcon: Icon(Icons.chat_bubble),
             label: '聊天',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.photo_camera_back_outlined),
+            selectedIcon: Icon(Icons.photo_camera_back),
+            label: '朋友圈',
           ),
           NavigationDestination(
             icon: Icon(Icons.auto_stories_outlined),

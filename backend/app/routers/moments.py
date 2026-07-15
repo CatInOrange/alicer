@@ -72,9 +72,12 @@ def create_moments_router(db: Database, llm: LlmService) -> APIRouter:
 
 async def _generate_moment(db: Database, llm: LlmService, *, settings: dict) -> dict:
     companion = str(((settings.get("companion") or {}).get("name") or "Alice")).strip() or "Alice"
-    recent = db.list_messages(limit=30)
+    moments_settings = settings.get("moments") or {}
+    photo_probability = _probability(moments_settings.get("photoProbability"), default=0.45)
+    reference_image_url = str(moments_settings.get("referenceImageUrl") or "").strip()
+    recent = db.list_messages(limit=120)
     recent_text = "\n".join(
-        f"- {item['role']}: {item['content'][:300]}" for item in recent[-16:] if item.get("content")
+        f"- {item['role']}: {item['content'][:300]}" for item in recent[-40:] if item.get("content")
     )
     prompt = [
         {
@@ -83,6 +86,7 @@ async def _generate_moment(db: Database, llm: LlmService, *, settings: dict) -> 
                 f"你是{companion}，要写一条微信朋友圈。"
                 "像真实的人，不要像公告；文字有趣、有生活感，允许少量 emoji。"
                 "输出 JSON：content 是朋友圈正文，imagePrompt 是给图像模型的照片提示词。"
+                "imagePrompt 要描述真实随手拍场景、衣着、光线和动作，不要改变人物身份。"
             ),
         },
         {
@@ -95,21 +99,29 @@ async def _generate_moment(db: Database, llm: LlmService, *, settings: dict) -> 
     ]
     raw = await llm.complete(messages=prompt, model_settings=settings.get("model") or {})
     content, image_prompt = _parse_moment(raw)
-    image = await llm.generate_image(
-        prompt=(
-            "A natural smartphone photo for a WeChat Moments post, candid daily life, "
-            "soft realistic lighting, no text, no watermark. "
-            f"Scene: {image_prompt}"
-        ),
-        bucket="moments",
-    )
+    image = {"imageUrl": "", "provider": {"skippedByProbability": True}}
+    if random.random() <= photo_probability:
+        image = await llm.generate_image(
+            prompt=(
+                "Keep the same face and hairstyle, tall slender body with long legs, "
+                "natural candid smartphone photo for a WeChat Moments post, "
+                "soft realistic lighting, no text, no watermark, professional photography. "
+                f"Scene: {image_prompt}"
+            ),
+            bucket="moments",
+            reference_image_url=reference_image_url,
+        )
     return db.add_moment(
         moment_id=f"mom_{uuid.uuid4().hex}",
         author=companion,
         content=content,
         image_url=str(image.get("imageUrl") or ""),
         image_prompt=image_prompt,
-        metadata={"imageProvider": image.get("provider") or {}},
+        metadata={
+            "imageProvider": image.get("provider") or {},
+            "photoProbability": photo_probability,
+            "referenceImageUrl": reference_image_url,
+        },
     )
 
 
@@ -153,6 +165,14 @@ def _parse_moment(raw: str) -> tuple[str, str]:
     if not image_prompt:
         image_prompt = content
     return content[:500], image_prompt[:800]
+
+
+def _probability(value: object, *, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(0.0, min(1.0, parsed))
 
 
 def _seed_moment(db: Database) -> dict:

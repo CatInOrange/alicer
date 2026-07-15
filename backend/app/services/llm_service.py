@@ -62,19 +62,24 @@ class LlmService:
                     if text:
                         yield text
 
-    async def generate_image(self, *, prompt: str, bucket: str = "moments") -> dict:
+    async def generate_image(self, *, prompt: str, bucket: str = "moments", reference_image_url: str = "") -> dict:
         if not self.settings.image_api_key:
             return {
                 "imageUrl": "",
                 "provider": {"configured": False, "model": self.settings.image_model},
             }
-        url = self.settings.image_base_url.rstrip("/") + "/images/generations"
+        has_reference = bool(reference_image_url.strip())
+        url = self.settings.image_base_url.rstrip("/") + (
+            "/images/edits" if has_reference else "/images/generations"
+        )
         payload = {
             "model": self.settings.image_model,
             "prompt": prompt,
             "n": 1,
             "response_format": "b64_json",
         }
+        if has_reference:
+            payload["image"] = {"url": reference_image_url.strip()}
         async with httpx.AsyncClient(timeout=max(self.settings.request_timeout_seconds, 120)) as client:
             response = await client.post(
                 url,
