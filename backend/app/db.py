@@ -68,9 +68,6 @@ class Database:
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 );
-                CREATE INDEX IF NOT EXISTS idx_memories_status_kind
-                ON memories(status, kind, enabled, importance DESC, updated_at DESC);
-
                 CREATE TABLE IF NOT EXISTS memory_events (
                     id TEXT PRIMARY KEY,
                     memory_id TEXT NOT NULL,
@@ -157,6 +154,12 @@ class Database:
                     "expires_at": "REAL",
                     "last_used_at": "REAL",
                 },
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_memories_status_kind
+                ON memories(status, kind, enabled, importance DESC, updated_at DESC)
+                """
             )
 
     def _ensure_columns(self, conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
