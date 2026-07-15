@@ -181,7 +181,7 @@ class _RiftCard extends StatelessWidget {
                   _MiniChip(rift.genre),
                   _MiniChip(rift.surfaceRelation),
                   _MiniChip(rift.intensity),
-                  _MiniChip('第 ${rift.turnCount} 轮'),
+                  _MiniChip('第 ${rift.turnCount}/${rift.targetTurns} 轮'),
                 ],
               ),
               const SizedBox(height: 10),

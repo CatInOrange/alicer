@@ -9,7 +9,9 @@ class RiftScenario {
     required this.aiRole,
     required this.worldSetting,
     required this.coreConflict,
+    required this.imageUrl,
     required this.status,
+    required this.targetTurns,
     required this.turnCount,
     required this.stats,
     required this.summary,
@@ -28,7 +30,9 @@ class RiftScenario {
   final String aiRole;
   final String worldSetting;
   final String coreConflict;
+  final String imageUrl;
   final String status;
+  final int targetTurns;
   final int turnCount;
   final Map<String, int> stats;
   final String summary;
@@ -52,7 +56,9 @@ class RiftScenario {
       aiRole: json['aiRole']?.toString() ?? '',
       worldSetting: json['worldSetting']?.toString() ?? '',
       coreConflict: json['coreConflict']?.toString() ?? '',
+      imageUrl: json['imageUrl']?.toString() ?? '',
       status: json['status']?.toString() ?? 'active',
+      targetTurns: (json['targetTurns'] as num?)?.toInt() ?? 20,
       turnCount: (json['turnCount'] as num?)?.toInt() ?? 0,
       stats: {
         for (final entry in statsJson.entries)

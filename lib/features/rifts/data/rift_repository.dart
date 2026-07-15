@@ -27,6 +27,7 @@ class RiftRepository {
     required String genre,
     required String surfaceRelation,
     required String intensity,
+    required int targetTurns,
     String customSurfaceRelation = '',
   }) async {
     final response = await _client.postJson('/api/rifts', {
@@ -34,6 +35,7 @@ class RiftRepository {
       'surfaceRelation': surfaceRelation,
       'customSurfaceRelation': customSurfaceRelation,
       'intensity': intensity,
+      'targetTurns': targetTurns,
       'settings': settings.toBackendJson(),
     });
     return RiftDetail.fromJson(response);

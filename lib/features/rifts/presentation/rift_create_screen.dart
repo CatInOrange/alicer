@@ -48,6 +48,7 @@ const _relations = [
 ];
 
 const _intensities = ['随机', '轻松日常', '中等戏剧', '高张力', '极限修罗场'];
+const _lengths = [10, 20, 30, 50, 100];
 
 class RiftCreateScreen extends StatefulWidget {
   const RiftCreateScreen({super.key, required this.settings});
@@ -63,6 +64,7 @@ class _RiftCreateScreenState extends State<RiftCreateScreen> {
   String _genre = '随机';
   String _relation = '随机';
   String _intensity = '随机';
+  int _targetTurns = 20;
   bool _creating = false;
 
   @override
@@ -86,6 +88,7 @@ class _RiftCreateScreenState extends State<RiftCreateScreen> {
         surfaceRelation: _relation == '手动输入' ? '随机' : _relation,
         customSurfaceRelation: customRelation,
         intensity: _intensity,
+        targetTurns: _targetTurns,
       );
       if (!mounted) return;
       Navigator.of(context).pop<RiftDetail>(detail);
@@ -143,6 +146,11 @@ class _RiftCreateScreenState extends State<RiftCreateScreen> {
             value: _intensity,
             onSelected: (value) => setState(() => _intensity = value),
           ),
+          const SizedBox(height: 22),
+          _LengthSection(
+            value: _targetTurns,
+            onSelected: (value) => setState(() => _targetTurns = value),
+          ),
         ],
       ),
       bottomNavigationBar: SafeArea(
@@ -161,6 +169,44 @@ class _RiftCreateScreenState extends State<RiftCreateScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _LengthSection extends StatelessWidget {
+  const _LengthSection({required this.value, required this.onSelected});
+
+  final int value;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '剧本长度',
+          style: TextStyle(
+            color: colors.text,
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children:
+              _lengths.map((turns) {
+                return ChoiceChip(
+                  label: Text('$turns 轮'),
+                  selected: turns == value,
+                  onSelected: (_) => onSelected(turns),
+                );
+              }).toList(),
+        ),
+      ],
     );
   }
 }

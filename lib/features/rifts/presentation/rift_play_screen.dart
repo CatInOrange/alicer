@@ -1,6 +1,9 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../../../app/theme.dart';
+import '../../../core/network/api_client.dart';
 import '../../settings/domain/app_settings.dart';
 import '../data/rift_repository.dart';
 import '../domain/rift_models.dart';
@@ -84,11 +87,35 @@ class _RiftPlayScreenState extends State<RiftPlayScreen> {
     }
   }
 
+  void _showScenarioInfo() {
+    final scenario = _detail?.scenario;
+    if (scenario == null) return;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => _ScenarioInfoSheet(scenario: scenario),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final detail = _detail;
     return Scaffold(
-      appBar: AppBar(title: Text(detail?.scenario.title ?? '时空裂隙')),
+      extendBodyBehindAppBar: detail != null,
+      appBar: AppBar(
+        title: Text(detail?.scenario.title ?? '时空裂隙'),
+        backgroundColor:
+            detail == null ? null : Colors.black.withValues(alpha: 0.16),
+        foregroundColor: detail == null ? null : Colors.white,
+        actions: [
+          if (detail != null)
+            IconButton(
+              tooltip: '剧本信息',
+              onPressed: _showScenarioInfo,
+              icon: const Icon(Icons.badge_outlined),
+            ),
+        ],
+      ),
       body:
           _loading
               ? const Center(child: CircularProgressIndicator())
@@ -97,6 +124,7 @@ class _RiftPlayScreenState extends State<RiftPlayScreen> {
               : detail == null
               ? const Center(child: Text('裂隙不存在'))
               : _RiftBody(
+                settings: widget.settings,
                 detail: detail,
                 choosing: _choosing,
                 onChoose: _choose,
@@ -105,81 +133,182 @@ class _RiftPlayScreenState extends State<RiftPlayScreen> {
   }
 }
 
-class _RiftBody extends StatelessWidget {
+class _RiftBody extends StatefulWidget {
   const _RiftBody({
+    required this.settings,
     required this.detail,
     required this.choosing,
     required this.onChoose,
   });
 
+  final AlicerSettings settings;
   final RiftDetail detail;
   final bool choosing;
   final ValueChanged<RiftChoice> onChoose;
 
   @override
+  State<_RiftBody> createState() => _RiftBodyState();
+}
+
+class _RiftBodyState extends State<_RiftBody> {
+  late final PageController _pageController;
+  int _pageIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageIndex = _lastIndex;
+    _pageController = PageController(initialPage: _pageIndex);
+  }
+
+  @override
+  void didUpdateWidget(covariant _RiftBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.detail.events.length != oldWidget.detail.events.length) {
+      _pageIndex = _lastIndex;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_pageController.hasClients) return;
+        _pageController.animateToPage(
+          _pageIndex,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+        );
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  int get _lastIndex => (widget.detail.events.length - 1).clamp(0, 9999);
+
+  @override
   Widget build(BuildContext context) {
-    final scenario = detail.scenario;
+    final scenario = widget.detail.scenario;
     final colors = context.alicerColors;
-    return Column(
+    final bottomPadding = MediaQuery.paddingOf(context).bottom;
+    return Stack(
       children: [
-        _ScenarioHeader(scenario: scenario),
-        Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 18),
-            itemCount: detail.events.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 12),
-            itemBuilder:
-                (context, index) => _EventCard(event: detail.events[index]),
+        Positioned.fill(
+          child: _RiftBackground(
+            settings: widget.settings,
+            imageUrl: scenario.imageUrl,
           ),
         ),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            color: colors.surface,
-            border: Border(top: BorderSide(color: colors.border)),
+        Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black.withValues(alpha: 0.16),
+                  Colors.black.withValues(alpha: 0.28),
+                  Colors.black.withValues(alpha: 0.66),
+                ],
+              ),
+            ),
           ),
-          child: SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-              child:
-                  scenario.isEnded
-                      ? Text(
-                        '这条世界线已经抵达终点',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: colors.textSubtle,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      )
-                      : Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (choosing)
-                            const Padding(
-                              padding: EdgeInsets.only(bottom: 10),
-                              child: LinearProgressIndicator(),
+        ),
+        SafeArea(
+          child: Column(
+            children: [
+              const SizedBox(height: 58),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    _GlassPill(
+                      label:
+                          '第 ${scenario.turnCount}/${scenario.targetTurns} 轮',
+                    ),
+                    const SizedBox(width: 8),
+                    _GlassPill(label: scenario.intensity),
+                    const Spacer(),
+                    if (widget.detail.events.length > 1)
+                      _GlassPill(
+                        label:
+                            '${_pageIndex + 1}/${widget.detail.events.length}',
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: PageView.builder(
+                  controller: _pageController,
+                  itemCount: widget.detail.events.length,
+                  onPageChanged: (index) => setState(() => _pageIndex = index),
+                  itemBuilder:
+                      (context, index) =>
+                          _EventPage(event: widget.detail.events[index]),
+                ),
+              ),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.34),
+                  border: Border(
+                    top: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+                  ),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(14, 10, 14, bottomPadding + 12),
+                  child:
+                      scenario.isEnded
+                          ? Text(
+                            '这条世界线已经抵达终点',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.92),
+                              fontWeight: FontWeight.w800,
                             ),
-                          for (final choice in scenario.currentChoices) ...[
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton(
-                                onPressed:
-                                    choosing ? null : () => onChoose(choice),
-                                style: OutlinedButton.styleFrom(
-                                  alignment: Alignment.centerLeft,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                    vertical: 12,
+                          )
+                          : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (widget.choosing)
+                                const Padding(
+                                  padding: EdgeInsets.only(bottom: 10),
+                                  child: LinearProgressIndicator(),
+                                ),
+                              for (final choice in scenario.currentChoices.take(
+                                3,
+                              )) ...[
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: FilledButton.tonal(
+                                    onPressed:
+                                        widget.choosing
+                                            ? null
+                                            : () => widget.onChoose(choice),
+                                    style: FilledButton.styleFrom(
+                                      alignment: Alignment.centerLeft,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 12,
+                                      ),
+                                      backgroundColor: Colors.white.withValues(
+                                        alpha: 0.88,
+                                      ),
+                                      foregroundColor: colors.text,
+                                    ),
+                                    child: Text(
+                                      '${choice.id}. ${choice.text}',
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                                   ),
                                 ),
-                                child: Text('${choice.id}. ${choice.text}'),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                          ],
-                        ],
-                      ),
-            ),
+                                const SizedBox(height: 8),
+                              ],
+                            ],
+                          ),
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -187,53 +316,271 @@ class _RiftBody extends StatelessWidget {
   }
 }
 
-class _ScenarioHeader extends StatelessWidget {
-  const _ScenarioHeader({required this.scenario});
+class _RiftBackground extends StatefulWidget {
+  const _RiftBackground({required this.settings, required this.imageUrl});
 
-  final RiftScenario scenario;
+  final AlicerSettings settings;
+  final String imageUrl;
+
+  @override
+  State<_RiftBackground> createState() => _RiftBackgroundState();
+}
+
+class _RiftBackgroundState extends State<_RiftBackground> {
+  Future<Uint8List>? _imageBytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RiftBackground oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.imageUrl != widget.imageUrl ||
+        oldWidget.settings.apiBaseUrl != widget.settings.apiBaseUrl) {
+      _load();
+    }
+  }
+
+  void _load() {
+    final url = widget.imageUrl.trim();
+    _imageBytes =
+        url.isEmpty
+            ? null
+            : ApiClient(baseUrl: widget.settings.apiBaseUrl).getBytes(url);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.alicerColors;
-    return DecoratedBox(
+    final future = _imageBytes;
+    if (future == null) return const _FallbackBackground();
+    return FutureBuilder<Uint8List>(
+      future: future,
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes == null) return const _FallbackBackground();
+        return Image.memory(
+          bytes,
+          fit: BoxFit.cover,
+          width: double.infinity,
+          height: double.infinity,
+          gaplessPlayback: true,
+        );
+      },
+    );
+  }
+}
+
+class _FallbackBackground extends StatelessWidget {
+  const _FallbackBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    return const DecoratedBox(
       decoration: BoxDecoration(
-        color: colors.surface,
-        border: Border(bottom: BorderSide(color: colors.border)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                _HeaderChip(scenario.genre),
-                _HeaderChip(scenario.surfaceRelation),
-                _HeaderChip(scenario.intensity),
-                _HeaderChip('第 ${scenario.turnCount} 轮'),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Text(
-              '你：${scenario.userRole}',
-              style: TextStyle(color: colors.text, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '她：${scenario.aiRole}',
-              style: TextStyle(color: colors.textSubtle),
-            ),
-          ],
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF0F766E), Color(0xFF082F49), Color(0xFF111827)],
         ),
       ),
     );
   }
 }
 
-class _HeaderChip extends StatelessWidget {
-  const _HeaderChip(this.label);
+class _EventPage extends StatelessWidget {
+  const _EventPage({required this.event});
+
+  final RiftEvent event;
+
+  @override
+  Widget build(BuildContext context) {
+    final quoteColor = Theme.of(context).colorScheme.primaryContainer;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 8, 18, 18),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.46),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (event.choiceText.isNotEmpty) ...[
+                    Text(
+                      '你选择：${event.choiceText}',
+                      style: TextStyle(
+                        color: quoteColor,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (event.sceneText.isNotEmpty)
+                    Text.rich(
+                      _renderStoryText(
+                        event.sceneText,
+                        baseColor: Colors.white.withValues(alpha: 0.94),
+                        quoteColor: quoteColor,
+                      ),
+                      style: const TextStyle(height: 1.58, fontSize: 16),
+                    ),
+                  if (event.aiDialogue.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text.rich(
+                      _renderStoryText(
+                        '“${event.aiDialogue}”',
+                        baseColor: Colors.white.withValues(alpha: 0.86),
+                        quoteColor: quoteColor,
+                      ),
+                      style: const TextStyle(
+                        height: 1.52,
+                        fontSize: 16,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
+                  if (event.isEnding) ...[
+                    const SizedBox(height: 12),
+                    _GlassPill(label: '终局'),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+TextSpan _renderStoryText(
+  String text, {
+  required Color baseColor,
+  required Color quoteColor,
+}) {
+  final pattern = RegExp(r'([“"][^”"\n]{1,160}[”"])');
+  final spans = <TextSpan>[];
+  var cursor = 0;
+  for (final match in pattern.allMatches(text)) {
+    if (match.start > cursor) {
+      spans.add(
+        TextSpan(
+          text: text.substring(cursor, match.start),
+          style: TextStyle(color: baseColor),
+        ),
+      );
+    }
+    spans.add(
+      TextSpan(
+        text: match.group(0),
+        style: TextStyle(color: quoteColor, fontWeight: FontWeight.w800),
+      ),
+    );
+    cursor = match.end;
+  }
+  if (cursor < text.length) {
+    spans.add(
+      TextSpan(
+        text: text.substring(cursor),
+        style: TextStyle(color: baseColor),
+      ),
+    );
+  }
+  return TextSpan(children: spans);
+}
+
+class _ScenarioInfoSheet extends StatelessWidget {
+  const _ScenarioInfoSheet({required this.scenario});
+
+  final RiftScenario scenario;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    return SafeArea(
+      child: ListView(
+        shrinkWrap: true,
+        padding: const EdgeInsets.fromLTRB(18, 0, 18, 22),
+        children: [
+          Text(
+            scenario.title,
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _InfoChip(scenario.genre),
+              _InfoChip(scenario.surfaceRelation),
+              _InfoChip(scenario.intensity),
+              _InfoChip('${scenario.targetTurns} 轮'),
+              _InfoChip('第 ${scenario.turnCount} 轮'),
+            ],
+          ),
+          const SizedBox(height: 18),
+          _InfoLine(label: '你的身份', value: scenario.userRole),
+          _InfoLine(label: '她的身份', value: scenario.aiRole),
+          _InfoLine(label: '世界', value: scenario.worldSetting),
+          _InfoLine(label: '核心冲突', value: scenario.coreConflict),
+          if (scenario.summary.isNotEmpty)
+            _InfoLine(label: '进展', value: scenario.summary),
+          if (scenario.endingType.isNotEmpty)
+            _InfoLine(label: '结局', value: scenario.endingType),
+          const SizedBox(height: 8),
+          Text(
+            '隐藏关系、秘密和终局走向不会在这里剧透。',
+            style: TextStyle(color: colors.textSubtle),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoLine extends StatelessWidget {
+  const _InfoLine({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: colors.textSubtle,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(value, style: TextStyle(color: colors.text, height: 1.42)),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoChip extends StatelessWidget {
+  const _InfoChip(this.label);
 
   final String label;
 
@@ -242,11 +589,11 @@ class _HeaderChip extends StatelessWidget {
     final colors = context.alicerColors;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+        color: colors.surfaceSoft,
         borderRadius: BorderRadius.circular(999),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         child: Text(
           label,
           style: TextStyle(color: colors.textSubtle, fontSize: 12),
@@ -256,56 +603,28 @@ class _HeaderChip extends StatelessWidget {
   }
 }
 
-class _EventCard extends StatelessWidget {
-  const _EventCard({required this.event});
+class _GlassPill extends StatelessWidget {
+  const _GlassPill({required this.label});
 
-  final RiftEvent event;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.alicerColors;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: event.isEnding ? colors.surfaceSoft : colors.surface,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: colors.border.withValues(alpha: 0.72)),
+        color: Colors.black.withValues(alpha: 0.32),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (event.choiceText.isNotEmpty) ...[
-              Text(
-                '你选择：${event.choiceText}',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.primary,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 10),
-            ],
-            if (event.sceneText.isNotEmpty)
-              Text(
-                event.sceneText,
-                style: TextStyle(
-                  color: colors.text,
-                  height: 1.55,
-                  fontSize: 15,
-                ),
-              ),
-            if (event.aiDialogue.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Text(
-                '“${event.aiDialogue}”',
-                style: TextStyle(
-                  color: colors.textSubtle,
-                  height: 1.5,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            ],
-          ],
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
     );

@@ -148,7 +148,9 @@ class Database:
                     ai_role TEXT NOT NULL DEFAULT '',
                     world_setting TEXT NOT NULL DEFAULT '',
                     core_conflict TEXT NOT NULL DEFAULT '',
+                    image_url TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'active',
+                    target_turns INTEGER NOT NULL DEFAULT 20,
                     turn_count INTEGER NOT NULL DEFAULT 0,
                     stats_json TEXT NOT NULL DEFAULT '{}',
                     summary TEXT NOT NULL DEFAULT '',
@@ -177,6 +179,14 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_rift_events_scenario
                 ON rift_events(scenario_id, turn_index, created_at, id);
                 """
+            )
+            self._ensure_columns(
+                conn,
+                "rift_scenarios",
+                {
+                    "image_url": "TEXT NOT NULL DEFAULT ''",
+                    "target_turns": "INTEGER NOT NULL DEFAULT 20",
+                },
             )
             self._ensure_columns(
                 conn,
@@ -801,10 +811,11 @@ class Database:
                 """
                 INSERT INTO rift_scenarios(
                     id, title, genre, surface_relation, intensity, user_role,
-                    ai_role, world_setting, core_conflict, status, turn_count,
+                    ai_role, world_setting, core_conflict, image_url, status,
+                    target_turns, turn_count,
                     stats_json, summary, current_choices_json, hidden_json,
                     ending_type, created_at, updated_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     scenario_id,
@@ -816,7 +827,9 @@ class Database:
                     payload.get("aiRole") or "",
                     payload.get("worldSetting") or "",
                     payload.get("coreConflict") or "",
+                    payload.get("imageUrl") or "",
                     payload.get("status") or "active",
+                    int(payload.get("targetTurns") or 20),
                     int(payload.get("turnCount") or 0),
                     json.dumps(payload.get("stats") or {}, ensure_ascii=False),
                     payload.get("summary") or "",
@@ -840,7 +853,8 @@ class Database:
                 UPDATE rift_scenarios
                 SET title = ?, genre = ?, surface_relation = ?, intensity = ?,
                     user_role = ?, ai_role = ?, world_setting = ?,
-                    core_conflict = ?, status = ?, turn_count = ?,
+                    core_conflict = ?, image_url = ?, status = ?,
+                    target_turns = ?, turn_count = ?,
                     stats_json = ?, summary = ?, current_choices_json = ?,
                     ending_type = ?, updated_at = ?
                 WHERE id = ?
@@ -854,7 +868,9 @@ class Database:
                     next_item.get("aiRole") or "",
                     next_item.get("worldSetting") or "",
                     next_item.get("coreConflict") or "",
+                    next_item.get("imageUrl") or "",
                     next_item.get("status") or "active",
+                    int(next_item.get("targetTurns") or 20),
                     int(next_item.get("turnCount") or 0),
                     json.dumps(next_item.get("stats") or {}, ensure_ascii=False),
                     next_item.get("summary") or "",
@@ -937,7 +953,9 @@ class Database:
             "aiRole": row["ai_role"],
             "worldSetting": row["world_setting"],
             "coreConflict": row["core_conflict"],
+            "imageUrl": row["image_url"],
             "status": row["status"],
+            "targetTurns": row["target_turns"],
             "turnCount": row["turn_count"],
             "stats": json.loads(row["stats_json"] or "{}"),
             "summary": row["summary"],
