@@ -46,6 +46,7 @@ class MomentPost {
     required this.createdAt,
     required this.likes,
     required this.comments,
+    this.metadata = const <String, dynamic>{},
   });
 
   final String id;
@@ -55,6 +56,7 @@ class MomentPost {
   final DateTime createdAt;
   final List<String> likes;
   final List<MomentComment> comments;
+  final Map<String, dynamic> metadata;
 
   factory MomentPost.fromJson(Map<String, dynamic> json) {
     return MomentPost(
@@ -72,6 +74,9 @@ class MomentPost {
             (item) => MomentComment.fromJson(Map<String, dynamic>.from(item)),
           )
           .toList(growable: false),
+      metadata: Map<String, dynamic>.from(
+        (json['metadata'] as Map?) ?? const <String, dynamic>{},
+      ),
     );
   }
 
@@ -83,6 +88,7 @@ class MomentPost {
     'createdAt': createdAt.toIso8601String(),
     'likes': likes,
     'comments': comments.map((item) => item.toJson()).toList(),
+    'metadata': metadata,
   };
 }
 

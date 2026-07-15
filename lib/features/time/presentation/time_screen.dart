@@ -391,6 +391,13 @@ class _MomentCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.alicerColors;
     final userLiked = post.likes.contains(settings.companion.userName);
+    final lifeThread = Map<String, dynamic>.from(
+      (post.metadata['lifeThread'] as Map?) ?? const <String, dynamic>{},
+    );
+    final visibility = Map<String, dynamic>.from(
+      (post.metadata['visibility'] as Map?) ?? const <String, dynamic>{},
+    );
+    final moodTag = (post.metadata['moodTag'] ?? '').toString();
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -417,6 +424,11 @@ class _MomentCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(post.content, style: const TextStyle(height: 1.45)),
+                _MomentMetaChips(
+                  lifeThread: lifeThread,
+                  visibility: visibility,
+                  moodTag: moodTag,
+                ),
                 if (post.imageUrl.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   ClipRRect(
@@ -485,6 +497,94 @@ class _MomentCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _MomentMetaChips extends StatelessWidget {
+  const _MomentMetaChips({
+    required this.lifeThread,
+    required this.visibility,
+    required this.moodTag,
+  });
+
+  final Map<String, dynamic> lifeThread;
+  final Map<String, dynamic> visibility;
+  final String moodTag;
+
+  @override
+  Widget build(BuildContext context) {
+    final chips = <_MomentChipData>[];
+    final visibilityLabel = (visibility['label'] ?? '').toString();
+    if ((visibility['type'] ?? '').toString() == 'private' &&
+        visibilityLabel.isNotEmpty) {
+      chips.add(
+        _MomentChipData(
+          icon: Icons.lock_outline_rounded,
+          label: visibilityLabel,
+        ),
+      );
+    }
+    final threadTitle = (lifeThread['title'] ?? '').toString();
+    final threadBeat = (lifeThread['beat'] ?? '').toString();
+    if (threadTitle.isNotEmpty) {
+      chips.add(
+        _MomentChipData(
+          icon: Icons.auto_stories_outlined,
+          label:
+              threadBeat.isEmpty ? threadTitle : '$threadTitle · $threadBeat',
+        ),
+      );
+    }
+    if (moodTag.isNotEmpty) {
+      chips.add(
+        _MomentChipData(icon: Icons.bubble_chart_outlined, label: moodTag),
+      );
+    }
+    if (chips.isEmpty) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final chip in chips.take(3))
+            Container(
+              constraints: const BoxConstraints(maxWidth: 220),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.68),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: scheme.outlineVariant),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(chip.icon, size: 13, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      chip.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MomentChipData {
+  const _MomentChipData({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
 }
 
 class _MomentImage extends StatefulWidget {
