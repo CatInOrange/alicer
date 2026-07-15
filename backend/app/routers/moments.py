@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
+import datetime as dt
 import random
 import uuid
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
 from ..db import Database
 from ..services.llm_service import LlmService
 from ..services.prompt_service import merge_settings
+
+
+TZ = ZoneInfo("Asia/Shanghai")
 
 
 def create_moments_router(db: Database, llm: LlmService) -> APIRouter:
@@ -104,7 +110,78 @@ def create_moments_router(db: Database, llm: LlmService) -> APIRouter:
     return router
 
 
-async def _generate_moment(db: Database, llm: LlmService, *, settings: dict, force_photo: bool = False) -> dict:
+async def run_moments_scheduler(db: Database, llm: LlmService) -> None:
+    await _catch_up_daily_moment(db, llm)
+    while True:
+        next_run = _next_daily_moment_run()
+        await asyncio.sleep(max(1.0, (next_run - dt.datetime.now(TZ)).total_seconds()))
+        await _generate_scheduled_moment(db, llm, next_run.date())
+
+
+async def _catch_up_daily_moment(db: Database, llm: LlmService) -> None:
+    now = dt.datetime.now(TZ)
+    today_target = dt.datetime.combine(now.date(), dt.time(hour=12), tzinfo=TZ)
+    latest = today_target if now >= today_target else today_target - dt.timedelta(days=1)
+    if now - latest <= dt.timedelta(hours=12):
+        await _generate_scheduled_moment(db, llm, latest.date())
+
+
+async def _generate_scheduled_moment(db: Database, llm: LlmService, day: dt.date) -> dict:
+    job_key = f"moments:daily:{day.isoformat()}"
+    if db.get_scheduled_job(job_key) or _has_scheduled_moment_for_day(db, day):
+        return {"created": False, "moment": None, "reason": "already_decided"}
+    settings = merge_settings(db.get_settings())
+    probability = _probability((settings.get("moments") or {}).get("dailyPostProbability"), default=0.55)
+    if random.random() > probability:
+        result = {
+            "created": False,
+            "reason": "skipped_by_probability",
+            "probability": probability,
+        }
+        db.upsert_scheduled_job(job_key=job_key, result=result)
+        return {"created": False, "moment": None, "reason": "skipped_by_probability"}
+    moment = await _generate_moment(
+        db,
+        llm,
+        settings=settings,
+        source="scheduled_1200",
+    )
+    db.upsert_scheduled_job(
+        job_key=job_key,
+        result={
+            "created": True,
+            "momentId": moment.get("id"),
+            "probability": probability,
+        },
+    )
+    return {"created": True, "moment": moment}
+
+
+def _next_daily_moment_run() -> dt.datetime:
+    now = dt.datetime.now(TZ)
+    target = dt.datetime.combine(now.date(), dt.time(hour=12), tzinfo=TZ)
+    return target if now < target else target + dt.timedelta(days=1)
+
+
+def _has_scheduled_moment_for_day(db: Database, day: dt.date) -> bool:
+    start = dt.datetime.combine(day, dt.time.min, tzinfo=TZ).timestamp()
+    end = dt.datetime.combine(day, dt.time.max, tzinfo=TZ).timestamp()
+    for item in db.list_moments(limit=100):
+        created_at = float(item.get("createdAt") or 0)
+        metadata = item.get("metadata") or {}
+        if start <= created_at <= end and metadata.get("source") == "scheduled_1200":
+            return True
+    return False
+
+
+async def _generate_moment(
+    db: Database,
+    llm: LlmService,
+    *,
+    settings: dict,
+    force_photo: bool = False,
+    source: str = "manual",
+) -> dict:
     companion = str(((settings.get("companion") or {}).get("name") or "Alice")).strip() or "Alice"
     user_name = str(((settings.get("companion") or {}).get("userName") or "用户")).strip() or "用户"
     moments_settings = settings.get("moments") or {}
@@ -128,6 +205,7 @@ async def _generate_moment(db: Database, llm: LlmService, *, settings: dict, for
                 "你有自己的生活、工作/学习、社交、兴趣和日常安排；如果角色设定没有明确职业，就写通用日常，不要编成用户的单位、公司、岗位、项目或行程。"
                 "最近聊天只能提供情绪、关系氛围和灵感，禁止把用户说过的第一人称经历改写成你的经历。"
                 "不要出现“我在你的公司/单位/项目里”这类混淆身份的内容。"
+                "内容和 imagePrompt 都禁止出现“咖啡”两个字，也不要使用英文 coffee。"
                 "像真实的人，不要像公告；文字短一点、有生活感，允许少量 emoji。"
                 "输出 JSON：content 是朋友圈正文，imagePrompt 是给图像模型的照片提示词。"
                 "imagePrompt 只描述你自己的随手拍场景、衣着、光线和动作，不要描述用户，不要出现其他主要人物。"
@@ -144,6 +222,8 @@ async def _generate_moment(db: Database, llm: LlmService, *, settings: dict, for
     ]
     raw = await llm.complete(messages=prompt, model_settings=settings.get("model") or {})
     content, image_prompt = _parse_moment(raw)
+    content = _sanitize_scene_text(content)
+    image_prompt = _sanitize_scene_text(image_prompt)
     image = {"imageUrl": "", "provider": {"skippedByProbability": True}}
     if force_photo or random.random() <= photo_probability:
         image = await llm.generate_image(
@@ -166,6 +246,7 @@ async def _generate_moment(db: Database, llm: LlmService, *, settings: dict, for
             "forcePhoto": force_photo,
             "referenceImageUrl": reference_image_url,
             "identityPromptPrefix": identity_prompt_prefix,
+            "source": source,
         },
     )
 
@@ -210,6 +291,15 @@ def _parse_moment(raw: str) -> tuple[str, str]:
     if not image_prompt:
         image_prompt = content
     return content[:500], image_prompt[:800]
+
+
+def _sanitize_scene_text(text: str) -> str:
+    result = text
+    result = result.replace("咖啡", "饮品")
+    result = result.replace("coffee", "drink")
+    result = result.replace("Coffee", "drink")
+    result = result.replace("COFFEE", "DRINK")
+    return result
 
 
 def _probability(value: object, *, default: float) -> float:

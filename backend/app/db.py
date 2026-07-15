@@ -34,6 +34,12 @@ class Database:
                     updated_at REAL NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS scheduled_jobs (
+                    job_key TEXT PRIMARY KEY,
+                    ran_at REAL NOT NULL,
+                    result_json TEXT NOT NULL DEFAULT '{}'
+                );
+
                 CREATE TABLE IF NOT EXISTS messages (
                     id TEXT PRIMARY KEY,
                     role TEXT NOT NULL,
@@ -119,6 +125,30 @@ class Database:
                 (json.dumps(payload, ensure_ascii=False), now),
             )
         return payload
+
+    def get_scheduled_job(self, job_key: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT job_key, ran_at, result_json FROM scheduled_jobs WHERE job_key = ?",
+                (job_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "jobKey": row["job_key"],
+            "ranAt": row["ran_at"],
+            "result": json.loads(row["result_json"] or "{}"),
+        }
+
+    def upsert_scheduled_job(self, *, job_key: str, result: dict) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO scheduled_jobs(job_key, ran_at, result_json)
+                VALUES(?, ?, ?)
+                """,
+                (job_key, time.time(), json.dumps(result, ensure_ascii=False)),
+            )
 
     def list_messages(self, limit: int = 80) -> list[dict]:
         with self.connect() as conn:
