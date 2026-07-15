@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../../app/theme.dart';
+import '../../../core/network/api_client.dart';
 import '../../settings/data/settings_store.dart';
 import '../../settings/domain/app_settings.dart';
 import '../data/time_repository.dart';
@@ -397,17 +399,9 @@ class _MomentCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(6),
                     child: AspectRatio(
                       aspectRatio: 1,
-                      child: Image.network(
-                        _absoluteImageUrl(settings.apiBaseUrl, post.imageUrl),
-                        fit: BoxFit.cover,
-                        errorBuilder:
-                            (_, _, _) => Container(
-                              color:
-                                  Theme.of(
-                                    context,
-                                  ).colorScheme.surfaceContainerHighest,
-                              child: const Icon(Icons.broken_image_outlined),
-                            ),
+                      child: _MomentImage(
+                        apiBaseUrl: settings.apiBaseUrl,
+                        imageUrl: post.imageUrl,
                       ),
                     ),
                   ),
@@ -465,6 +459,71 @@ class _MomentCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _MomentImage extends StatefulWidget {
+  const _MomentImage({required this.apiBaseUrl, required this.imageUrl});
+
+  final String apiBaseUrl;
+  final String imageUrl;
+
+  @override
+  State<_MomentImage> createState() => _MomentImageState();
+}
+
+class _MomentImageState extends State<_MomentImage> {
+  late Future<Uint8List> _imageBytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _imageBytes = _loadImage();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MomentImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.apiBaseUrl != widget.apiBaseUrl ||
+        oldWidget.imageUrl != widget.imageUrl) {
+      _imageBytes = _loadImage();
+    }
+  }
+
+  Future<Uint8List> _loadImage() {
+    return ApiClient(baseUrl: widget.apiBaseUrl).getBytes(widget.imageUrl);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fallbackColor = Theme.of(context).colorScheme.surfaceContainerHighest;
+    return FutureBuilder<Uint8List>(
+      future: _imageBytes,
+      builder: (context, snapshot) {
+        if (snapshot.hasData) {
+          return Image.memory(
+            snapshot.data!,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+          );
+        }
+        if (snapshot.hasError) {
+          return Container(
+            color: fallbackColor,
+            child: const Icon(Icons.broken_image_outlined),
+          );
+        }
+        return Container(
+          color: fallbackColor,
+          child: const Center(
+            child: SizedBox.square(
+              dimension: 22,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -629,10 +688,4 @@ String _currentPeriodKey(String kind) {
     return '${now.year}-W${week.toString().padLeft(2, '0')}';
   }
   return DateFormat('yyyy-MM-dd').format(now);
-}
-
-String _absoluteImageUrl(String baseUrl, String value) {
-  if (value.startsWith('http://') || value.startsWith('https://')) return value;
-  final normalized = value.startsWith('/') ? value : '/$value';
-  return '${baseUrl.replaceAll(RegExp(r'/$'), '')}$normalized';
 }

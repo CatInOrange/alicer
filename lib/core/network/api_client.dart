@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -24,6 +25,23 @@ class ApiClient {
         .get(uri(path, query), headers: {'Accept': 'application/json'})
         .timeout(const Duration(seconds: 18));
     return _decodeResponse(response);
+  }
+
+  Future<Uint8List> getBytes(String pathOrUrl) async {
+    final uri =
+        pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')
+            ? Uri.parse(pathOrUrl)
+            : this.uri(pathOrUrl);
+    final response = await _httpClient
+        .get(uri, headers: {'Accept': 'image/*'})
+        .timeout(const Duration(seconds: 30));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        statusCode: response.statusCode,
+        message: 'Failed to load image bytes from $uri',
+      );
+    }
+    return response.bodyBytes;
   }
 
   Future<Map<String, dynamic>> postJson(
