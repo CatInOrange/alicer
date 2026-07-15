@@ -216,17 +216,16 @@ class _RiftBodyState extends State<_RiftBody> {
         SafeArea(
           child: Column(
             children: [
-              const SizedBox(height: 58),
+              const SizedBox(height: 42),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Row(
                   children: [
-                    _GlassPill(
-                      label:
-                          '第 ${scenario.turnCount}/${scenario.targetTurns} 轮',
-                    ),
+                    _GlassPill(label: '第 ${scenario.turnCount} 轮'),
                     const SizedBox(width: 8),
                     _GlassPill(label: scenario.intensity),
+                    const SizedBox(width: 8),
+                    _GlassPill(label: '共 ${scenario.targetTurns} 轮'),
                     const Spacer(),
                     if (widget.detail.events.length > 1)
                       _GlassPill(
@@ -258,14 +257,7 @@ class _RiftBodyState extends State<_RiftBody> {
                   padding: EdgeInsets.fromLTRB(14, 10, 14, bottomPadding + 12),
                   child:
                       scenario.isEnded
-                          ? Text(
-                            '这条世界线已经抵达终点',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.92),
-                              fontWeight: FontWeight.w800,
-                            ),
-                          )
+                          ? _EndingSummary(scenario: scenario)
                           : Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -299,6 +291,11 @@ class _RiftBodyState extends State<_RiftBody> {
                                       '${choice.id}. ${choice.text}',
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        height: 1.2,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -398,68 +395,79 @@ class _EventPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final quoteColor = Theme.of(context).colorScheme.primaryContainer;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 8, 18, 18),
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.46),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (event.choiceText.isNotEmpty) ...[
-                    Text(
-                      '你选择：${event.choiceText}',
-                      style: TextStyle(
-                        color: quoteColor,
-                        fontWeight: FontWeight.w800,
-                      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 560,
+                maxHeight: constraints.maxHeight,
+              ),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.46),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.12),
+                  ),
+                ),
+                child: Scrollbar(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (event.choiceText.isNotEmpty) ...[
+                          Text(
+                            '你选择：${event.choiceText}',
+                            style: TextStyle(
+                              color: quoteColor,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        if (event.sceneText.isNotEmpty)
+                          Text.rich(
+                            _renderStoryText(
+                              event.sceneText,
+                              baseColor: Colors.white.withValues(alpha: 0.94),
+                              quoteColor: quoteColor,
+                            ),
+                            style: const TextStyle(height: 1.58, fontSize: 16),
+                          ),
+                        if (event.aiDialogue.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          Text.rich(
+                            _renderStoryText(
+                              '“${event.aiDialogue}”',
+                              baseColor: Colors.white.withValues(alpha: 0.86),
+                              quoteColor: quoteColor,
+                            ),
+                            style: const TextStyle(
+                              height: 1.52,
+                              fontSize: 16,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ],
+                        if (event.isEnding) ...[
+                          const SizedBox(height: 12),
+                          _GlassPill(label: '终局'),
+                        ],
+                      ],
                     ),
-                    const SizedBox(height: 12),
-                  ],
-                  if (event.sceneText.isNotEmpty)
-                    Text.rich(
-                      _renderStoryText(
-                        event.sceneText,
-                        baseColor: Colors.white.withValues(alpha: 0.94),
-                        quoteColor: quoteColor,
-                      ),
-                      style: const TextStyle(height: 1.58, fontSize: 16),
-                    ),
-                  if (event.aiDialogue.isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    Text.rich(
-                      _renderStoryText(
-                        '“${event.aiDialogue}”',
-                        baseColor: Colors.white.withValues(alpha: 0.86),
-                        quoteColor: quoteColor,
-                      ),
-                      style: const TextStyle(
-                        height: 1.52,
-                        fontSize: 16,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ],
-                  if (event.isEnding) ...[
-                    const SizedBox(height: 12),
-                    _GlassPill(label: '终局'),
-                  ],
-                ],
+                  ),
+                ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -547,6 +555,55 @@ class _ScenarioInfoSheet extends StatelessWidget {
       ),
     );
   }
+}
+
+class _EndingSummary extends StatelessWidget {
+  const _EndingSummary({required this.scenario});
+
+  final RiftScenario scenario;
+
+  @override
+  Widget build(BuildContext context) {
+    final ending = _endingName(scenario.endingType);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          ending,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.primaryContainer,
+            fontWeight: FontWeight.w900,
+            fontSize: 16,
+          ),
+        ),
+        if (scenario.summary.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(
+            scenario.summary,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.82)),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+String _endingName(String endingType) {
+  return switch (endingType) {
+    'romance_happy_ending' => '圆满恋爱结局',
+    'true_ending' => '真相相守结局',
+    'sweet_ending' => '甜蜜相守结局',
+    'tragic_ending' => '悲剧诀别结局',
+    'betrayal_ending' => '背离破局结局',
+    'collapse_ending' => '裂隙崩塌结局',
+    'bittersweet_ending' => '苦甜告别结局',
+    'escape_ending' => '携手逃亡结局',
+    _ => '终局',
+  };
 }
 
 class _InfoLine extends StatelessWidget {

@@ -53,6 +53,16 @@ SURFACE_RELATIONS = [
 
 INTENSITIES = ["轻松日常", "中等戏剧", "高张力", "极限修罗场"]
 TARGET_TURNS = [10, 20, 30, 50, 100]
+ENDING_NAMES = {
+    "romance_happy_ending": "圆满恋爱结局",
+    "true_ending": "真相相守结局",
+    "sweet_ending": "甜蜜相守结局",
+    "tragic_ending": "悲剧诀别结局",
+    "betrayal_ending": "背离破局结局",
+    "collapse_ending": "裂隙崩塌结局",
+    "bittersweet_ending": "苦甜告别结局",
+    "escape_ending": "携手逃亡结局",
+}
 
 ROMANCE_TONES = [
     "甜宠暧昧",
@@ -321,7 +331,7 @@ def create_rifts_router(db: Database, llm: LlmService) -> APIRouter:
                 "turnCount": 0,
                 "stats": stats,
                 "summary": generated["summary"],
-                "currentChoices": generated["choices"],
+                "currentChoices": _start_choices(),
                 "hidden": {**hidden, "imageProvider": image.get("provider") or {}},
             },
         )
@@ -487,13 +497,13 @@ async def _generate_opening(
             "stats": stats,
         },
         (
-            "返回 JSON，字段：title,userRole,aiRole,worldSetting,coreConflict,scene,aiDialogue,summary,choices。"
-            "choices 为 3 个选项，每项含 id(A/B/C), text, tone。"
+            "返回 JSON，字段：title,userRole,aiRole,worldSetting,coreConflict,scene,aiDialogue,summary。"
             f"这是约 {target_turns} 轮长度的故事，第一幕只埋钩子，不要提前终局。"
             f"伴侣固定叫 {companion}；用户固定叫 {user_name}。"
             "角色对话里她称呼用户时只能使用 userName 或亲密称呼，不得给用户另起新姓名。"
+            "scene 必须巧妙交代世界观、用户当前处境、核心冲突或阶段目标，让用户读完就知道这个剧本大致要解决什么。"
             "不要暴露 hidden 字段名或隐藏真相；只让剧情有暗流。"
-            "scene 120-220 字，aiDialogue 1-2 句。"
+            "scene 150-240 字，aiDialogue 1-2 句。"
         ),
     )
     data = await _complete_json(llm, settings=settings, prompt=prompt)
@@ -506,7 +516,7 @@ async def _generate_opening(
         "scene": _clean(data.get("scene"), _fallback_scene(genre, surface_relation)),
         "aiDialogue": _clean(data.get("aiDialogue"), "她看着你，像是终于等到了这一刻。"),
         "summary": _clean(data.get("summary"), "裂隙开启，两人的身份与命运发生偏移。"),
-        "choices": _normalize_choices(data.get("choices") or []) or _fallback_choices(),
+        "choices": _start_choices(),
     }
 
 
@@ -543,6 +553,7 @@ async def _generate_turn(
         (
             "返回 JSON，字段：scene,aiDialogue,choices,stateDelta,summaryPatch。"
             "choices 必须正好 3 个选项，每项含 id,text,tone；选项必须有不同代价和行动方向。"
+            "每个选项 text 不超过 28 个中文字符，必须能在手机按钮两行内完整显示。"
             "stateDelta 只能包含 trust,affection,danger,truth,rift，数值 -15 到 15。"
             f"这是约 {target_turns} 轮长度的故事，当前第 {next_turn} 轮。"
             "除非已进入终局接口，否则不要结局；临近目标轮数时逐步收束核心冲突，不要突然反转完结。"
@@ -580,6 +591,7 @@ async def _generate_ending(
         (
             "返回 JSON，字段：scene,aiDialogue,stateDelta,summaryPatch。"
             "这是终局，不再给 choices。必须回应用户最后的选择，并收束核心冲突。"
+            f"结局名是“{_ending_name(ending_type)}”，scene 和 summaryPatch 都要自然写明这个中文结局名。"
             f"故事目标长度是 {target_turns} 轮；终局必须承接已发生剧情，写出选择导致的结果，不要突然机械完结。"
             "她称呼用户时只能使用 scenario 中已给定的用户名字或亲密称呼，不得另起新姓名。"
             "可以苦甜，但不要草率；不要暴露 hidden 字段名。"
@@ -590,7 +602,7 @@ async def _generate_ending(
         "scene": _clean(data.get("scene"), "裂隙在最后一次选择后安静下来，这条世界线抵达了它的终点。"),
         "aiDialogue": _clean(data.get("aiDialogue"), "她轻声说：这一次，我记住你了。"),
         "stateDelta": _normalize_delta(data.get("stateDelta") or {}),
-        "summaryPatch": _clean(data.get("summaryPatch"), f"副本以 {ending_type} 收束。"),
+        "summaryPatch": _clean(data.get("summaryPatch"), f"副本以{_ending_name(ending_type)}收束。"),
     }
 
 
@@ -675,13 +687,13 @@ def _normalize_choices(raw: object) -> list[dict]:
     for index, item in enumerate(raw[:3]):
         if not isinstance(item, dict):
             continue
-        text = str(item.get("text") or "").strip()
+        text = _limit_choice_text(str(item.get("text") or "").strip())
         if not text:
             continue
         choices.append(
             {
                 "id": str(item.get("id") or labels[min(index, 2)]).strip()[:1].upper(),
-                "text": text[:120],
+                "text": text,
                 "tone": str(item.get("tone") or "选择").strip()[:12],
             }
         )
@@ -690,10 +702,21 @@ def _normalize_choices(raw: object) -> list[dict]:
 
 def _fallback_choices() -> list[dict]:
     return [
-        {"id": "A", "text": "向她靠近一步，低声问她到底隐瞒了什么", "tone": "靠近"},
-        {"id": "B", "text": "保持距离，先观察她的反应和周围局势", "tone": "试探"},
-        {"id": "C", "text": "主动打破僵局，把危险引到自己身上", "tone": "牺牲"},
+        {"id": "A", "text": "靠近她，问清隐瞒", "tone": "靠近"},
+        {"id": "B", "text": "先观察局势", "tone": "试探"},
+        {"id": "C", "text": "主动引开危险", "tone": "牺牲"},
     ]
+
+
+def _start_choices() -> list[dict]:
+    return [{"id": "A", "text": "开始旅程", "tone": "启程"}]
+
+
+def _limit_choice_text(text: str) -> str:
+    compact = re.sub(r"\s+", "", text)
+    if len(compact) <= 28:
+        return compact
+    return compact[:27] + "…"
 
 
 def _normalize_delta(raw: object) -> dict:
@@ -731,6 +754,8 @@ def _ending_type(stats: dict, turn: int, target_turns: int) -> str:
         return "collapse_ending"
     if turn < max(4, target_turns - 2):
         return ""
+    if turn >= max(6, target_turns - 1) and trust >= 58 and affection >= 58 and danger < 86:
+        return "romance_happy_ending"
     if trust >= 74 and affection >= 70 and truth >= 55:
         return "true_ending"
     if affection >= 76 and danger < 82:
@@ -744,8 +769,14 @@ def _ending_type(stats: dict, turn: int, target_turns: int) -> str:
     if truth >= 70:
         return "bittersweet_ending"
     if turn >= target_turns:
+        if affection >= 52 and trust >= 45 and danger < 90:
+            return "romance_happy_ending"
         return "escape_ending"
     return ""
+
+
+def _ending_name(ending_type: str) -> str:
+    return ENDING_NAMES.get(ending_type, "未知结局")
 
 
 def _merge_summary(current: object, patch: object) -> str:

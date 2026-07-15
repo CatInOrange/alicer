@@ -78,6 +78,45 @@ class _RiftListScreenState extends State<RiftListScreen> {
     _load();
   }
 
+  Future<void> _confirmDelete(RiftScenario scenario) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('删除裂隙'),
+            content: Text('确定删除「${scenario.title}」吗？这条剧本记录会一并移除。'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('删除'),
+              ),
+            ],
+          ),
+    );
+    if (confirmed != true || !mounted) return;
+    final previous = _rifts;
+    setState(() {
+      _rifts = _rifts.where((item) => item.id != scenario.id).toList();
+    });
+    try {
+      await RiftRepository(settings: _settings).deleteRift(scenario.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('裂隙已删除')));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _rifts = previous);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('删除失败：$error')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.alicerColors;
@@ -131,7 +170,11 @@ class _RiftListScreenState extends State<RiftListScreen> {
                   separatorBuilder: (_, _) => const SizedBox(height: 10),
                   itemBuilder: (context, index) {
                     final rift = _rifts[index];
-                    return _RiftCard(rift: rift, onTap: () => _open(rift));
+                    return _RiftCard(
+                      rift: rift,
+                      onTap: () => _open(rift),
+                      onLongPress: () => _confirmDelete(rift),
+                    );
                   },
                 ),
       ),
@@ -140,10 +183,15 @@ class _RiftListScreenState extends State<RiftListScreen> {
 }
 
 class _RiftCard extends StatelessWidget {
-  const _RiftCard({required this.rift, required this.onTap});
+  const _RiftCard({
+    required this.rift,
+    required this.onTap,
+    required this.onLongPress,
+  });
 
   final RiftScenario rift;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -154,6 +202,7 @@ class _RiftCard extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
         onTap: onTap,
+        onLongPress: onLongPress,
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Column(
