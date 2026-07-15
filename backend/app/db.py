@@ -819,7 +819,7 @@ class Database:
                 """,
                 (
                     scenario_id,
-                    payload.get("title") or "未命名裂隙",
+                    payload.get("title") or "未命名剧本",
                     payload.get("genre") or "",
                     payload.get("surfaceRelation") or "",
                     payload.get("intensity") or "",

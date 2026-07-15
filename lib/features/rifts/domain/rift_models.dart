@@ -48,7 +48,7 @@ class RiftScenario {
     final choicesJson = (json['currentChoices'] as List?) ?? const [];
     return RiftScenario(
       id: json['id']?.toString() ?? '',
-      title: json['title']?.toString() ?? '未命名裂隙',
+      title: json['title']?.toString() ?? '未命名剧本',
       genre: json['genre']?.toString() ?? '',
       surfaceRelation: json['surfaceRelation']?.toString() ?? '',
       intensity: json['intensity']?.toString() ?? '',

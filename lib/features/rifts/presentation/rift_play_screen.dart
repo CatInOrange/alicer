@@ -599,7 +599,7 @@ String _endingName(String endingType) {
     'sweet_ending' => '甜蜜相守结局',
     'tragic_ending' => '悲剧诀别结局',
     'betrayal_ending' => '背离破局结局',
-    'collapse_ending' => '裂隙崩塌结局',
+    'collapse_ending' => '失控崩塌结局',
     'bittersweet_ending' => '苦甜告别结局',
     'escape_ending' => '携手逃亡结局',
     _ => '终局',
