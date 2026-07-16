@@ -74,6 +74,51 @@ def build_life_context(db: Database, settings: dict | None = None) -> dict:
     }
 
 
+async def refresh_life_plan(
+    db: Database,
+    llm: LlmService,
+    *,
+    settings: dict | None = None,
+    force_profile: bool = False,
+) -> dict:
+    merged = merge_settings(settings or db.get_settings())
+    life_settings = merged.get("life") or {}
+    if life_settings.get("enabled") is False:
+        return {"refreshed": False, "reason": "disabled", "context": build_life_context(db, merged)}
+    slot = dt.datetime.now(TZ).replace(minute=0, second=0, microsecond=0)
+    stored = db.get_life_state() or {}
+    if force_profile:
+        profile, memory_ids = _derive_profile_from_memories(db, merged)
+        profile_updated_at = dt.datetime.now(TZ).timestamp()
+        profile["memoryIds"] = memory_ids
+        profile["profileUpdatedAt"] = profile_updated_at
+    else:
+        profile, memory_ids, profile_updated_at = _current_profile(db, merged, stored)
+    plan = await _generate_daily_plan(
+        llm,
+        settings=merged,
+        profile=profile,
+        slot=slot,
+        recent_events=list(reversed(db.list_life_events(limit=12))),
+        fact_constraints=fact_constraints_for_life(db, merged),
+    )
+    plan["date"] = slot.date().isoformat()
+    state = stored.get("state") or _default_state(merged)
+    db.save_life_state(
+        profile=profile,
+        state=state,
+        plan=plan,
+        profile_updated_at=profile_updated_at,
+        plan_date=slot.date().isoformat(),
+    )
+    return {
+        "refreshed": True,
+        "profileMemoryIds": memory_ids,
+        "plan": plan,
+        "context": build_life_context(db, merged),
+    }
+
+
 def choose_moment_life_event(db: Database) -> dict | None:
     for item in db.list_life_events(limit=18):
         if item.get("canPostMoment") and not item.get("usedMomentId"):

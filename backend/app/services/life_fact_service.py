@@ -119,6 +119,47 @@ async def extract_life_facts(
     return saved
 
 
+async def refresh_life_facts_from_recent_chat(
+    db: Database,
+    llm: LlmService,
+    *,
+    settings: dict | None = None,
+    limit: int = 40,
+) -> dict:
+    merged = merge_settings(settings or db.get_settings())
+    messages = db.list_messages(limit=max(2, min(limit, 120)))
+    pairs: list[tuple[dict, dict]] = []
+    pending_user: dict | None = None
+    for message in messages:
+        if message.get("role") == "user":
+            pending_user = message
+        elif message.get("role") == "assistant" and pending_user is not None:
+            if _should_extract(pending_user, message):
+                pairs.append((pending_user, message))
+            pending_user = None
+    saved: list[dict] = []
+    for user_message, assistant_message in pairs[-12:]:
+        saved.extend(
+            await extract_life_facts(
+                db,
+                llm,
+                settings=merged,
+                user_message=user_message,
+                assistant_message=assistant_message,
+                life_context={},
+            )
+        )
+    cleanup = cleanup_life_facts(db)
+    return {
+        "scannedMessages": len(messages),
+        "candidatePairs": len(pairs),
+        "savedFacts": saved,
+        "cleanup": cleanup,
+        "world": build_world_context(db, merged),
+        "audit": audit_life_facts(db),
+    }
+
+
 def build_world_context(db: Database, settings: dict | None = None) -> dict:
     merged = merge_settings(settings or db.get_settings())
     cleanup_life_facts(db)

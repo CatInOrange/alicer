@@ -5,6 +5,16 @@ from .context_composer import RECENT_HISTORY_COUNT, compose_prompt_context
 
 
 SYSTEM_PROMPT_CHAR_BUDGET = 120_000
+LEGACY_CONTEXT_MODULE_IDS = {
+    "short_term_memory",
+    "world_context",
+    "life_state",
+    "user_timeline",
+    "chat_photo",
+    "history_older",
+    "history_recent_20",
+    "long_term_memory",
+}
 
 
 def merge_settings(stored: dict | None) -> dict:
@@ -29,7 +39,7 @@ def merge_settings(stored: dict | None) -> dict:
         stored_modules = [
             item
             for item in stored.get("promptModules") or []
-            if isinstance(item, dict) and item.get("id") != "short_term_memory"
+            if isinstance(item, dict) and str(item.get("id") or "") not in LEGACY_CONTEXT_MODULE_IDS
         ]
         existing_ids = {str(item.get("id") or "") for item in stored_modules}
         missing = [

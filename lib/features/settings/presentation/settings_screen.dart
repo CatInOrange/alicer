@@ -40,8 +40,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isRestartingBackend = false;
   bool _isLoadingLife = false;
   bool _isAdvancingLife = false;
+  bool _isRefreshingLifePlan = false;
   bool _isLoadingLifeFacts = false;
   bool _isCleaningLifeFacts = false;
+  bool _isRefreshingLifeFacts = false;
   bool _isLoadingUserTimeline = false;
   bool _isSyncingUserTimeline = false;
   String _environmentStatus = '尚未读取';
@@ -557,8 +559,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     status: _lifeStatus,
                     isLoading: _isLoadingLife,
                     isAdvancing: _isAdvancingLife,
+                    isRefreshingPlan: _isRefreshingLifePlan,
                     onRefresh: _loadLifeRecords,
                     onAdvance: _advanceLifeOnce,
+                    onRefreshPlan: _refreshLifePlan,
                   ),
                   const SizedBox(height: 18),
                   _LifeFactsPanel(
@@ -567,8 +571,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     status: _lifeFactsStatus,
                     isLoading: _isLoadingLifeFacts,
                     isCleaning: _isCleaningLifeFacts,
+                    isRefreshingFacts: _isRefreshingLifeFacts,
                     onRefresh: _loadLifeFacts,
                     onCleanup: _cleanupLifeFacts,
+                    onRefreshFacts: _refreshLifeFactsFromChat,
                     onCreate: _createLifeFact,
                     onEdit: _editLifeFact,
                     onComplete: _completeLifeFact,
@@ -1201,6 +1207,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _refreshLifeFactsFromChat() async {
+    if (_isRefreshingLifeFacts) return;
+    setState(() {
+      _isRefreshingLifeFacts = true;
+      _lifeFactsStatus = '正在从最近聊天重抽生活事实...';
+    });
+    try {
+      final response = await ApiClient(baseUrl: _currentApiBaseUrl()).postJson(
+        '/api/life/facts/refresh',
+        {'limit': 60, 'settings': _settings.toBackendJson()},
+        timeout: const Duration(seconds: 90),
+      );
+      final savedCount = ((response['savedFacts'] as List?) ?? const []).length;
+      await _loadLifeFacts();
+      if (!mounted) return;
+      setState(() => _lifeFactsStatus = '重抽完成，新增/更新 $savedCount 条事实');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _lifeFactsStatus = '重抽失败：$error');
+    } finally {
+      if (mounted) setState(() => _isRefreshingLifeFacts = false);
+    }
+  }
+
   Future<void> _createLifeFact() async {
     final payload = await _showLifeFactEditor();
     if (payload == null) return;
@@ -1494,6 +1524,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _refreshLifePlan() async {
+    if (_isRefreshingLifePlan) return;
+    setState(() {
+      _isRefreshingLifePlan = true;
+      _lifeStatus = '正在重编今日生活计划...';
+    });
+    try {
+      await ApiClient(baseUrl: _currentApiBaseUrl()).postJson(
+        '/api/life/plan/refresh',
+        {'settings': _settings.toBackendJson(), 'forceProfile': true},
+        timeout: const Duration(seconds: 90),
+      );
+      await _loadLifeRecords();
+      unawaited(_loadLifeFacts());
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _lifeStatus = '重编计划失败：$error');
+    } finally {
+      if (mounted) setState(() => _isRefreshingLifePlan = false);
+    }
+  }
+
   Future<void> _loadUserTimeline() async {
     if (!mounted) return;
     setState(() {
@@ -1647,8 +1699,10 @@ class _LifeRecordsPanel extends StatelessWidget {
     required this.status,
     required this.isLoading,
     required this.isAdvancing,
+    required this.isRefreshingPlan,
     required this.onRefresh,
     required this.onAdvance,
+    required this.onRefreshPlan,
   });
 
   final Map<String, dynamic>? contextData;
@@ -1656,8 +1710,10 @@ class _LifeRecordsPanel extends StatelessWidget {
   final String status;
   final bool isLoading;
   final bool isAdvancing;
+  final bool isRefreshingPlan;
   final VoidCallback onRefresh;
   final VoidCallback onAdvance;
+  final VoidCallback onRefreshPlan;
 
   @override
   Widget build(BuildContext context) {
@@ -1701,6 +1757,17 @@ class _LifeRecordsPanel extends StatelessWidget {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                       : const Icon(Icons.refresh_rounded),
+            ),
+            IconButton(
+              tooltip: '重编今日计划',
+              onPressed: isRefreshingPlan ? null : onRefreshPlan,
+              icon:
+                  isRefreshingPlan
+                      ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                      : const Icon(Icons.event_repeat_outlined),
             ),
             IconButton(
               tooltip: '推进一次',
@@ -1818,8 +1885,10 @@ class _LifeFactsPanel extends StatelessWidget {
     required this.status,
     required this.isLoading,
     required this.isCleaning,
+    required this.isRefreshingFacts,
     required this.onRefresh,
     required this.onCleanup,
+    required this.onRefreshFacts,
     required this.onCreate,
     required this.onEdit,
     required this.onComplete,
@@ -1831,8 +1900,10 @@ class _LifeFactsPanel extends StatelessWidget {
   final String status;
   final bool isLoading;
   final bool isCleaning;
+  final bool isRefreshingFacts;
   final VoidCallback onRefresh;
   final VoidCallback onCleanup;
+  final VoidCallback onRefreshFacts;
   final VoidCallback onCreate;
   final ValueChanged<Map<String, dynamic>> onEdit;
   final ValueChanged<Map<String, dynamic>> onComplete;
@@ -1871,6 +1942,17 @@ class _LifeFactsPanel extends StatelessWidget {
               tooltip: '新增事实',
               onPressed: onCreate,
               icon: const Icon(Icons.add_rounded),
+            ),
+            IconButton(
+              tooltip: '从最近聊天重抽事实',
+              onPressed: isRefreshingFacts ? null : onRefreshFacts,
+              icon:
+                  isRefreshingFacts
+                      ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                      : const Icon(Icons.psychology_alt_outlined),
             ),
             IconButton(
               tooltip: '清理过期事实',

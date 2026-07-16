@@ -4,8 +4,8 @@ import datetime as dt
 
 
 RECENT_HISTORY_COUNT = 20
-RECENT_HISTORY_CHAR_BUDGET = 24_000
-OLDER_HISTORY_CHAR_BUDGET = 36_000
+RECENT_HISTORY_CHAR_BUDGET = 12_000
+OLDER_HISTORY_CHAR_BUDGET = 8_000
 
 
 def compose_prompt_context(
@@ -33,6 +33,17 @@ def compose_prompt_context(
     world_guardrails = _format_world_guardrails(world_context)
     world_legacy = _format_world_context(world_context)
     life_text = _format_life_context(life_context)
+    context_brief = _format_context_brief(
+        current=world_current,
+        commitments=world_commitments,
+        trajectory=world_trajectory,
+        user=world_user,
+        photos=world_photos,
+        history_older=history_older,
+        history_recent=history_recent,
+        memory=world_memory,
+        guardrails=world_guardrails,
+    )
 
     companion = settings.get("companion") or {}
     environment_settings = settings.get("environment") or {}
@@ -50,6 +61,7 @@ def compose_prompt_context(
         "world.photos": world_photos,
         "world.memory": world_memory,
         "world.guardrails": world_guardrails,
+        "context.brief": context_brief,
         "life.current": life_text,
         "user.current": world_user,
         "chat.photo": world_photos,
@@ -63,6 +75,7 @@ def compose_prompt_context(
         "variables": variables,
         "package": {
             "world": {
+                "brief": context_brief,
                 "current": world_current,
                 "commitments": world_commitments,
                 "trajectory": world_trajectory,
@@ -82,6 +95,41 @@ def compose_prompt_context(
         },
         "promptHistory": prompt_history,
     }
+
+
+def _format_context_brief(
+    *,
+    current: str,
+    commitments: str,
+    trajectory: str,
+    user: str,
+    photos: str,
+    history_older: str,
+    history_recent: str,
+    memory: str,
+    guardrails: str,
+) -> str:
+    sections = [
+        ("最高优先级一致性规则", guardrails),
+        ("Alicer 当前状态", current),
+        ("未完成承诺、计划和稳定事实", commitments),
+        ("用户现实线索", user),
+        ("照片/自拍连续性", photos),
+        ("Alicer 最近生活轨迹", trajectory),
+        ("最近 20 条聊天", history_recent),
+        ("更早聊天摘要", history_older),
+        ("长期记忆", memory),
+    ]
+    lines = [
+        "下面是本轮回复唯一需要使用的运行上下文，按优先级排列；不要逐段复述，只在相关时自然使用。",
+        "如果不同来源冲突，优先级为：事实账本/明确承诺 > 当前生活状态 > 最近聊天 > 长期记忆 > 随机发挥。",
+    ]
+    for title, content in sections:
+        text = str(content or "").strip()
+        if not text:
+            continue
+        lines.append(f"\n## {title}\n{text}")
+    return "\n".join(lines)
 
 
 def select_prompt_history(*, settings: dict, recent_messages: list[dict]) -> list[dict]:
@@ -420,4 +468,3 @@ def _clamp_int(value: object, *, default: int, minimum: int, maximum: int) -> in
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(maximum, parsed))
-

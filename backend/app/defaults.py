@@ -58,64 +58,12 @@ DEFAULT_SETTINGS: dict = {
             "content": "当前环境：{{current.time}}{{current.location}}{{current.weather}}",
         },
         {
-            "id": "life_state",
-            "title": "伴侣生活状态",
-            "description": "后台模拟的当前生活、最近轨迹和连续事件。",
-            "enabled": True,
-            "order": 46,
-            "content": "伴侣自己的生活状态：{{life.current}}",
-        },
-        {
-            "id": "world_context",
-            "title": "一致性事实账本",
-            "description": "聊天、朋友圈、生活模拟共同遵守的承诺、计划和稳定事实。",
+            "id": "runtime_context",
+            "title": "运行上下文",
+            "description": "统一组织事实账本、生活状态、用户轨迹、照片承诺、历史和长期记忆。",
             "enabled": True,
             "order": 44,
-            "content": (
-                "当前世界状态：\n{{world.current}}\n\n"
-                "未完成承诺与计划：\n{{world.commitments}}\n\n"
-                "{{world.guardrails}}"
-            ),
-        },
-        {
-            "id": "user_timeline",
-            "title": "用户生活轨迹",
-            "description": "由手机信号归纳出的用户场景、地点变化、音乐和可打扰程度。",
-            "enabled": True,
-            "order": 50,
-            "content": "用户当前现实状态：{{user.current}}",
-        },
-        {
-            "id": "chat_photo",
-            "title": "聊天照片",
-            "description": "聊天中自拍/生活照的承诺、额度和自然发送规则。",
-            "enabled": True,
-            "order": 52,
-            "content": "聊天照片规则：{{chat.photo}}",
-        },
-        {
-            "id": "history_older",
-            "title": "更早聊天历史",
-            "description": "最新 20 条之前的历史，按上下文预算裁剪。",
-            "enabled": True,
-            "order": 55,
-            "content": "更早的聊天历史：{{history.older}}",
-        },
-        {
-            "id": "history_recent_20",
-            "title": "最新 20 条聊天",
-            "description": "最接近当前回复的原始聊天上下文。",
-            "enabled": True,
-            "order": 58,
-            "content": "最新 20 条聊天：{{history.recent_20}}",
-        },
-        {
-            "id": "long_term_memory",
-            "title": "长期记忆",
-            "description": "稳定事实、偏好、关系事件和重要回忆。",
-            "enabled": True,
-            "order": 60,
-            "content": "长期记忆：{{memory.long_term}}",
+            "content": "{{context.brief}}",
         },
     ],
     "environment": {

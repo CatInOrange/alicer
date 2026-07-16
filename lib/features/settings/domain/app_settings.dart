@@ -731,8 +731,20 @@ class AlicerSettings {
 }
 
 List<PromptModule> _mergePromptModules(List<PromptModule> stored) {
+  const legacyContextModuleIds = {
+    'short_term_memory',
+    'world_context',
+    'life_state',
+    'user_timeline',
+    'chat_photo',
+    'history_older',
+    'history_recent_20',
+    'long_term_memory',
+  };
   final filtered =
-      stored.where((item) => item.id != 'short_term_memory').toList();
+      stored
+          .where((item) => !legacyContextModuleIds.contains(item.id))
+          .toList();
   if (filtered.isEmpty) return defaultPromptModules;
   final ids = filtered.map((item) => item.id).toSet();
   return [
@@ -750,6 +762,7 @@ IconData promptModuleIcon(String id) {
     'reply_style' => Icons.chat_outlined,
     'emoji_style' => Icons.emoji_emotions_outlined,
     'environment' => Icons.wb_sunny_outlined,
+    'runtime_context' => Icons.account_tree_outlined,
     'world_context' => Icons.account_tree_outlined,
     'life_state' => Icons.timeline_outlined,
     'user_timeline' => Icons.phone_android_outlined,
@@ -819,69 +832,12 @@ const defaultPromptModules = <PromptModule>[
     order: 40,
   ),
   PromptModule(
-    id: 'life_state',
-    title: '伴侣生活状态',
-    description: '后台模拟的当前生活、最近轨迹和连续事件。',
-    icon: Icons.timeline_outlined,
-    content: '伴侣自己的生活状态：{{life.current}}',
-    enabled: true,
-    order: 46,
-  ),
-  PromptModule(
-    id: 'world_context',
-    title: '一致性事实账本',
-    description: '聊天、朋友圈、生活模拟共同遵守的承诺、计划和稳定事实。',
+    id: 'runtime_context',
+    title: '运行上下文',
+    description: '统一组织事实账本、生活状态、用户轨迹、照片承诺、历史和长期记忆。',
     icon: Icons.account_tree_outlined,
-    content:
-        '当前世界状态：\n{{world.current}}\n\n'
-        '未完成承诺与计划：\n{{world.commitments}}\n\n'
-        '{{world.guardrails}}',
+    content: '{{context.brief}}',
     enabled: true,
     order: 44,
-  ),
-  PromptModule(
-    id: 'user_timeline',
-    title: '用户生活轨迹',
-    description: '由手机信号归纳出的用户场景、地点变化、音乐和可打扰程度。',
-    icon: Icons.phone_android_outlined,
-    content: '用户当前现实状态：{{user.current}}',
-    enabled: true,
-    order: 50,
-  ),
-  PromptModule(
-    id: 'chat_photo',
-    title: '聊天照片',
-    description: '聊天中自拍/生活照的承诺、额度和自然发送规则。',
-    icon: Icons.add_a_photo_outlined,
-    content: '聊天照片规则：{{chat.photo}}',
-    enabled: true,
-    order: 52,
-  ),
-  PromptModule(
-    id: 'history_older',
-    title: '更早聊天历史',
-    description: '最新 20 条之前的历史，按上下文预算裁剪。',
-    icon: Icons.manage_history_outlined,
-    content: '更早的聊天历史：{{history.older}}',
-    enabled: true,
-    order: 55,
-  ),
-  PromptModule(
-    id: 'history_recent_20',
-    title: '最新 20 条聊天',
-    description: '最接近当前回复的原始聊天上下文。',
-    icon: Icons.forum_outlined,
-    content: '最新 20 条聊天：{{history.recent_20}}',
-    enabled: true,
-    order: 58,
-  ),
-  PromptModule(
-    id: 'long_term_memory',
-    title: '长期记忆',
-    description: '稳定事实、偏好、关系里程碑和重要回忆。',
-    icon: Icons.auto_stories_outlined,
-    content: '长期记忆：{{memory.long_term}}',
-    enabled: true,
-    order: 60,
   ),
 ];

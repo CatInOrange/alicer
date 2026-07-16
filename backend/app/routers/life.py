@@ -10,8 +10,9 @@ from ..services.life_fact_service import (
     build_world_context,
     cleanup_life_facts,
     normalize_fact_patch,
+    refresh_life_facts_from_recent_chat,
 )
-from ..services.life_service import advance_life_until_now, build_life_context
+from ..services.life_service import advance_life_until_now, build_life_context, refresh_life_plan
 from ..services.llm_service import LlmService
 from ..services.prompt_service import merge_settings
 
@@ -54,6 +55,13 @@ def create_life_router(db: Database, llm: LlmService) -> APIRouter:
     def cleanup_facts() -> dict:
         result = cleanup_life_facts(db)
         return {"cleanup": result, "audit": audit_life_facts(db)}
+
+    @router.post("/life/facts/refresh")
+    async def refresh_facts(body: dict | None = None) -> dict:
+        payload = body or {}
+        settings = merge_settings(payload.get("settings") or db.get_settings())
+        limit = int(payload.get("limit") or 40)
+        return await refresh_life_facts_from_recent_chat(db, llm, settings=settings, limit=limit)
 
     @router.post("/life/facts")
     def create_life_fact(body: dict | None = None) -> dict:
@@ -135,6 +143,17 @@ def create_life_router(db: Database, llm: LlmService) -> APIRouter:
             llm,
             settings=settings,
             force=payload.get("force") is True,
+        )
+
+    @router.post("/life/plan/refresh")
+    async def refresh_plan(body: dict | None = None) -> dict:
+        payload = body or {}
+        settings = merge_settings(payload.get("settings") or db.get_settings())
+        return await refresh_life_plan(
+            db,
+            llm,
+            settings=settings,
+            force_profile=payload.get("forceProfile") is True,
         )
 
     return router
