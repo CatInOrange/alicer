@@ -2,18 +2,49 @@ package com.openclaw.alicer
 
 import android.content.ComponentName
 import android.content.Context
+import android.app.Notification
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 
 class UserTimelineNotificationListener : NotificationListenerService() {
+    override fun onListenerConnected() {
+        instance = this
+        refreshFromActiveNotifications()
+    }
+
+    override fun onDestroy() {
+        if (instance === this) instance = null
+        super.onDestroy()
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
+        rememberIfMedia(sbn)
+    }
+
+    private fun refreshFromActiveNotifications() {
+        try {
+            activeNotifications
+                ?.sortedByDescending { it.postTime }
+                ?.forEach { rememberIfMedia(it) }
+        } catch (_: SecurityException) {
+        } catch (_: RuntimeException) {
+        }
+    }
+
+    private fun rememberIfMedia(sbn: StatusBarNotification?) {
         val notification = sbn?.notification ?: return
-        val extras = notification.extras ?: return
-        val title = extras.getCharSequence("android.title")?.toString()?.trim().orEmpty()
-        val text = extras.getCharSequence("android.text")?.toString()?.trim().orEmpty()
+        if (!looksLikeMedia(sbn.packageName, notification.category)) return
+        val title = notification.extras
+            ?.getCharSequence("android.title")
+            ?.toString()
+            ?.trim()
+            .orEmpty()
+        val text = listOf("android.text", "android.subText", "android.infoText")
+            .mapNotNull { notification.extras?.getCharSequence(it)?.toString()?.trim() }
+            .firstOrNull { it.isNotBlank() }
+            .orEmpty()
         if (title.isBlank() && text.isBlank()) return
-        if (!looksLikeMedia(sbn.packageName)) return
         latestTitle = title
         latestArtist = text
         latestPackage = sbn.packageName
@@ -21,6 +52,7 @@ class UserTimelineNotificationListener : NotificationListenerService() {
     }
 
     companion object {
+        private var instance: UserTimelineNotificationListener? = null
         private var latestTitle: String = ""
         private var latestArtist: String = ""
         private var latestPackage: String = ""
@@ -36,6 +68,7 @@ class UserTimelineNotificationListener : NotificationListenerService() {
         }
 
         fun latestMediaEvent(now: Double): Map<String, Any?>? {
+            instance?.refreshFromActiveNotifications()
             if (latestTitle.isBlank()) return null
             if (System.currentTimeMillis() - latestAt > 6 * 3600 * 1000) return null
             return mapOf(
@@ -56,7 +89,8 @@ class UserTimelineNotificationListener : NotificationListenerService() {
             )
         }
 
-        private fun looksLikeMedia(packageName: String): Boolean {
+        private fun looksLikeMedia(packageName: String, category: String?): Boolean {
+            if (category == Notification.CATEGORY_TRANSPORT) return true
             val lower = packageName.lowercase()
             return listOf("music", "spotify", "netease", "qqmusic", "kugou", "kuwo", "apple")
                 .any { lower.contains(it) }

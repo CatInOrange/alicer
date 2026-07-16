@@ -226,28 +226,49 @@ def _format_user_context(user_context: dict) -> str:
     state = user_context.get("state") or {}
     recent_events = user_context.get("recentEvents") or []
     lines = []
+    location_bits = [
+        str(state.get("scene") or "").strip(),
+        str(state.get("locationLabel") or "").strip(),
+        f"城市：{state.get('city')}" if state.get("city") else "",
+        f"区县：{state.get('district')}" if state.get("district") else "",
+        f"约{state.get('locationAgeMinutes')}分钟前更新"
+        if state.get("locationAgeMinutes") is not None
+        else "",
+        "位置线索可能过期" if state.get("locationStale") else "",
+    ]
     state_parts = [
         str(state.get("activity") or "").strip(),
-        f"地点线索：{state.get('locationLabel')}" if state.get("locationLabel") else "",
+        f"地点线索：{_join_text(location_bits, '，')}" if any(location_bits) else "",
+        f"可打扰程度：{state.get('availability')}" if state.get("availability") else "",
         f"音乐：{state.get('music')}" if state.get("music") else "",
         f"运动：{state.get('motion')}" if state.get("motion") else "",
-        f"耳机：{state.get('headset')}" if state.get("headset") else "",
         f"注意状态：{state.get('attentionState')}" if state.get("attentionState") else "",
     ]
     compact = "；".join(part for part in state_parts if part)
     lines.append("- 用户当前状态：" + (compact or "暂无手机轨迹状态。"))
+    if state.get("cityChanged"):
+        lines.append("- 重要变化：用户所在城市发生变化，这是强信号；优先考虑旅途、出差、旅行、返程等语境。")
+    elif state.get("placeChanged"):
+        lines.append("- 重要变化：用户地点刚发生变化，可以自然关心是不是刚到一个地方。")
     if state.get("summary"):
         lines.append(f"- 用户近期摘要：{state['summary']}")
+    if state.get("relationshipCue"):
+        lines.append(f"- 聊天使用建议：{state['relationshipCue']}")
     if recent_events:
-        lines.append("- 用户最近轨迹：")
-        for item in recent_events[-8:]:
+        lines.append("- 用户最近高价值轨迹：")
+        for item in recent_events[-6:]:
             time_text = str(item.get("timeLabel") or "").strip()
             summary = str(item.get("summary") or item.get("title") or "").strip()
             lines.append(f"  - {time_text}：{summary}".strip())
-    lines.append("- 这是用户授权的手机上下文，只能自然地用于关心和判断打扰程度。")
-    lines.append("- 不要暴露精确坐标、不要表现得像监控；除非用户询问，否则不要逐条汇报。")
+    lines.append("- 这是用户授权的现实上下文，要自然用于语气、话题选择、关心点和打扰程度判断。")
+    lines.append("- 可以轻描淡写地联动用户状态，但不要暴露精确坐标、不要逐条汇报、不要表现得像监控。")
+    lines.append("- 位置/音乐/运动低置信或过期时只当弱线索；不要把推断说成绝对事实。")
     lines.append("- 如果用户问“我在哪/我在干嘛/我刚才做什么/我在听什么”，优先依据这里回答，并说明不确定性。")
     return "\n".join(lines)
+
+
+def _join_text(items: list[str], separator: str) -> str:
+    return separator.join(item for item in (str(value or "").strip() for value in items) if item)
 
 
 def _clamp_int(value: object, *, default: int, minimum: int, maximum: int) -> int:

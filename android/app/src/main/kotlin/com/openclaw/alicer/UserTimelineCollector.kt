@@ -62,13 +62,15 @@ object UserTimelineCollector {
         if (!fine && !coarse) return emptyList()
         val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return emptyList()
         val location = bestLastKnownLocation(manager) ?: return emptyList()
+        val locationTime = if (location.time > 0L) location.time / 1000.0 else now
+        val ageSeconds = (now - locationTime).coerceAtLeast(0.0)
         val locationEvent = mapOf(
-            "eventTime" to now,
+            "eventTime" to locationTime,
             "source" to "android",
             "eventType" to "location_snapshot",
             "title" to "后台位置快照",
             "summary" to "手机在后台更新了一次低频位置。",
-            "confidence" to 0.68,
+            "confidence" to if (ageSeconds <= 90 * 60) 0.68 else 0.38,
             "privacyLevel" to "context",
             "metadata" to mapOf(
                 "label" to "当前位置",
@@ -76,13 +78,15 @@ object UserTimelineCollector {
                 "longitude" to "%.4f".format(location.longitude).toDouble(),
                 "accuracy" to location.accuracy,
                 "provider" to location.provider,
+                "locationTime" to locationTime,
+                "locationAgeSeconds" to ageSeconds,
             ),
         )
         if (!includeMotion) return listOf(locationEvent)
-        return listOf(locationEvent, motionEvent(location, now))
+        return listOf(locationEvent, motionEvent(location, locationTime, ageSeconds))
     }
 
-    private fun motionEvent(location: Location, now: Double): Map<String, Any?> {
+    private fun motionEvent(location: Location, eventTime: Double, ageSeconds: Double): Map<String, Any?> {
         val speed = if (location.hasSpeed()) location.speed else 0f
         val activity = when {
             speed >= 7.0f -> "in_vehicle"
@@ -95,14 +99,14 @@ object UserTimelineCollector {
             else -> "位置速度显示当前较稳定"
         }
         return mapOf(
-            "eventTime" to now,
+            "eventTime" to eventTime,
             "source" to "android",
             "eventType" to "motion_detected",
             "title" to "运动状态变化",
             "summary" to summary,
-            "confidence" to if (location.hasSpeed()) 0.62 else 0.42,
+            "confidence" to if (ageSeconds > 90 * 60) 0.28 else if (location.hasSpeed()) 0.62 else 0.42,
             "privacyLevel" to "context",
-            "metadata" to mapOf("activity" to activity, "speed" to speed),
+            "metadata" to mapOf("activity" to activity, "speed" to speed, "locationAgeSeconds" to ageSeconds),
         )
     }
 

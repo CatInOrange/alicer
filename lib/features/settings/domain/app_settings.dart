@@ -752,9 +752,9 @@ const defaultPromptModules = <PromptModule>[
   PromptModule(
     id: 'user_timeline',
     title: '用户生活轨迹',
-    description: '手机后台记录的地点、音乐、设备和活动上下文。',
+    description: '由手机信号归纳出的用户场景、地点变化、音乐和可打扰程度。',
     icon: Icons.phone_android_outlined,
-    content: '用户当前生活轨迹：{{user.current}}',
+    content: '用户当前现实状态：{{user.current}}',
     enabled: true,
     order: 50,
   ),

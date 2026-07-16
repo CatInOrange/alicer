@@ -68,10 +68,10 @@ DEFAULT_SETTINGS: dict = {
         {
             "id": "user_timeline",
             "title": "用户生活轨迹",
-            "description": "手机后台记录的用户当前状态、地点变化、音乐和设备上下文。",
+            "description": "由手机信号归纳出的用户场景、地点变化、音乐和可打扰程度。",
             "enabled": True,
             "order": 50,
-            "content": "用户当前生活轨迹：{{user.current}}",
+            "content": "用户当前现实状态：{{user.current}}",
         },
         {
             "id": "long_term_memory",

@@ -350,7 +350,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _CollapsiblePanel(
               icon: Icons.phone_android_outlined,
               title: '我的轨迹',
-              subtitle: 'Android 后台轻量记录地点、音乐、运动和设备状态，让她更懂你。',
+              subtitle: 'Android 后台归纳地点变化、城市变化、音乐和可打扰程度，让她更懂你。',
               child: Column(
                 children: [
                   _SwitchRow(
@@ -1450,8 +1450,13 @@ class _UserTimelinePanel extends StatelessWidget {
       (timeline['state'] as Map?) ?? const {},
     );
     final summary = _joinFilled([
+      _readString(state, 'scene'),
       _readString(state, 'activity'),
-      _readString(state, 'locationLabel'),
+      _joinFilled([
+        _readString(state, 'city'),
+        _readString(state, 'district'),
+        _readString(state, 'locationLabel'),
+      ], separator: ' · '),
       _readString(state, 'music'),
     ], separator: ' · ');
     return Column(
@@ -1519,17 +1524,34 @@ class _UserTimelinePanel extends StatelessWidget {
                 runSpacing: 8,
                 children: [
                   _LifeFactChip(
-                    label: '注意',
-                    value: _readString(state, 'attentionState', fallback: '未知'),
+                    label: '可打扰',
+                    value: _readString(state, 'availability', fallback: '未知'),
+                  ),
+                  _LifeFactChip(
+                    label: '地点更新',
+                    value:
+                        state['locationAgeMinutes'] == null
+                            ? '未记录'
+                            : '${state['locationAgeMinutes']} 分钟前',
+                  ),
+                  _LifeFactChip(
+                    label: '地点变化',
+                    value:
+                        state['cityChanged'] == true
+                            ? '城市变化'
+                            : state['placeChanged'] == true
+                            ? '地点切换'
+                            : '无明显变化',
                   ),
                   _LifeFactChip(
                     label: '运动',
                     value: _readString(state, 'motion', fallback: '未记录'),
                   ),
-                  _LifeFactChip(
-                    label: '耳机',
-                    value: _readString(state, 'headset', fallback: '未记录'),
-                  ),
+                  if (_readString(state, 'addressHint').isNotEmpty)
+                    _LifeFactChip(
+                      label: '地点线索',
+                      value: _readString(state, 'addressHint'),
+                    ),
                 ],
               ),
             ],
