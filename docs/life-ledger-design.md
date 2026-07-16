@@ -13,12 +13,12 @@ This design introduces a canonical Life Ledger as the source of truth for time-b
 First phase implementation has started the ledger foundation:
 
 - `life_facts` persistence exists for factual items with lifecycle status.
-- Chat can inject a bounded `world.context` into prompt rendering.
+- Chat injects bounded world context through `ContextComposer`.
 - Chat can schedule asynchronous fact extraction after a response.
 - Life simulation and Moments can read ledger constraints.
-- A default prompt module `world_context` exists, but the overall prompt organization is not yet rebuilt.
+- Default prompt modules now read from the unified context package: world facts, companion life state, user timeline, chat photo rules, split chat history, and long-term memory.
 
-Important limitation: the current prompt change is an additive injection. It is not the full Context Composer redesign described below.
+Important limitation: this is still the first strong-consistency pass. The ledger now guides prompts, life simulation, Moments, and photo decisions, but not every lifecycle loop is closed yet.
 
 ## Design Principles
 
@@ -433,7 +433,7 @@ Phase 1: Ledger foundation
 - Inject `world.context` into prompt.
 - Feed ledger constraints into life planning and Moments.
 
-Status: started.
+Status: implemented.
 
 Phase 2: Management and Prompt Composer
 
@@ -444,7 +444,7 @@ Phase 2: Management and Prompt Composer
 - Make `life.current`, `user.current`, `chat.photo`, and `world.context` come from the same context package.
 - Update default prompt modules to match the new organization.
 
-Status: backend implementation started. The API, cleanup/audit foundation, `ContextComposer`, default prompt variable migration, chat photo world-context read, and Moment writeback are implemented. A settings UI panel for reviewing/editing facts is still pending.
+Status: implemented. The API, cleanup/audit foundation, `ContextComposer`, default prompt variable migration, chat photo world-context read, Moment writeback, and settings UI panel for reviewing/editing facts are in place.
 
 Phase 3: Strong consistency loops
 
@@ -459,6 +459,8 @@ Phase 4: UI polish
 - Add fact ledger panel in settings.
 - Show current/upcoming reality in a compact, editable view.
 - Add manual correction flow for wrong commitments.
+
+Status: first usable version implemented in Settings under the life simulation section.
 
 ## Test Cases
 
