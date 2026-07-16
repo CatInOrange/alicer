@@ -559,6 +559,77 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.photo_camera_back_outlined,
+              title: '聊天照片',
+              subtitle: '聊天里请求自拍、主动生活照和每日额度。',
+              child: Column(
+                children: [
+                  _SwitchRow(
+                    icon: Icons.add_a_photo_outlined,
+                    title: '启用聊天照片',
+                    subtitle: '允许伴侣在聊天中自然发送自拍或生活照。',
+                    value: _settings.chatPhotos.enabled,
+                    onChanged:
+                        (value) => _setChatPhotos(
+                          _settings.chatPhotos.copyWith(enabled: value),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.person_search_outlined,
+                    title: '响应用户要照片',
+                    subtitle: '用户明确要自拍、穿搭照或生活照时，允许消耗额度生成。',
+                    value: _settings.chatPhotos.allowRequested,
+                    onChanged:
+                        (value) => _setChatPhotos(
+                          _settings.chatPhotos.copyWith(allowRequested: value),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.auto_awesome_outlined,
+                    title: '允许主动发照片',
+                    subtitle: '只有氛围和生活状态都合适时才会主动，仍受每日额度限制。',
+                    value: _settings.chatPhotos.allowProactive,
+                    onChanged:
+                        (value) => _setChatPhotos(
+                          _settings.chatPhotos.copyWith(allowProactive: value),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.today_outlined,
+                    title: '每日成功发送上限',
+                    subtitle:
+                        '${_settings.chatPhotos.dailySuccessfulLimit} 张 · 生成前检查，避免图片成本失控。',
+                    value: _settings.chatPhotos.dailySuccessfulLimit,
+                    min: 0,
+                    max: 5,
+                    divisions: 5,
+                    onChanged:
+                        (value) => _setChatPhotos(
+                          _settings.chatPhotos.copyWith(
+                            dailySuccessfulLimit: value,
+                          ),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.timelapse_outlined,
+                    title: '最小发送间隔',
+                    subtitle:
+                        '${_settings.chatPhotos.minHoursBetweenPhotos} 小时 · 防止一天内连续刷照片。',
+                    value: _settings.chatPhotos.minHoursBetweenPhotos,
+                    min: 0,
+                    max: 72,
+                    divisions: 24,
+                    onChanged:
+                        (value) => _setChatPhotos(
+                          _settings.chatPhotos.copyWith(
+                            minHoursBetweenPhotos: value,
+                          ),
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            _CollapsiblePanel(
+              icon: Icons.photo_camera_back_outlined,
               title: '朋友圈',
               subtitle: '伴侣自动发朋友圈的频率和真实感。',
               child: Column(
@@ -805,6 +876,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _settings = _settings.copyWith(userTimeline: userTimeline));
     unawaited(SettingsStore.save(_settings));
     unawaited(_userTimelineService.configureBackground(_settings));
+  }
+
+  void _setChatPhotos(ChatPhotoSettings chatPhotos) {
+    setState(() => _settings = _settings.copyWith(chatPhotos: chatPhotos));
+    unawaited(SettingsStore.save(_settings));
   }
 
   void _setModel(String model) {

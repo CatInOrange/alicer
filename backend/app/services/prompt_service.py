@@ -23,6 +23,7 @@ def merge_settings(stored: dict | None) -> dict:
         "moments",
         "life",
         "userTimeline",
+        "chatPhotos",
         "model",
     ):
         merged[key] = {**DEFAULT_SETTINGS.get(key, {}), **stored.get(key, {})}
@@ -52,6 +53,7 @@ def render_prompt(
     environment: dict | None,
     life_context: dict | None = None,
     user_context: dict | None = None,
+    photo_context: dict | None = None,
 ) -> tuple[list[dict], dict]:
     env = environment or {}
     modules = sorted(
@@ -65,6 +67,7 @@ def render_prompt(
         env=env,
         life_context=life_context or {},
         user_context=user_context or {},
+        photo_context=photo_context or {},
     )
     rendered_blocks = []
     for module in modules:
@@ -104,6 +107,7 @@ def _build_variables(
     env: dict,
     life_context: dict,
     user_context: dict,
+    photo_context: dict,
 ) -> dict[str, str]:
     companion = settings.get("companion") or {}
     environment = settings.get("environment") or {}
@@ -125,6 +129,7 @@ def _build_variables(
         long_term = _format_memories(memories[:24])
     life_text = _format_life_context(life_context)
     user_text = _format_user_context(user_context)
+    photo_text = _format_chat_photo_context(photo_context)
     return {
         "companion.name": str(companion.get("name") or "Alice"),
         "user.name": str(companion.get("userName") or "你"),
@@ -133,6 +138,7 @@ def _build_variables(
         "current.weather": weather_text,
         "life.current": life_text,
         "user.current": user_text,
+        "chat.photo": photo_text,
         "history.older": history_older,
         "history.recent_20": history_recent,
         "memory.short_term": short_term,
@@ -332,6 +338,41 @@ def _format_user_context(user_context: dict) -> str:
     lines.append("- 可以轻描淡写地联动用户状态，但不要暴露精确坐标、不要逐条汇报、不要表现得像监控。")
     lines.append("- 位置/音乐/运动低置信或过期时只当弱线索；不要把推断说成绝对事实。")
     lines.append("- 如果用户问“我在哪/我在干嘛/我刚才做什么/我在听什么”，优先依据这里回答，并说明不确定性。")
+    return "\n".join(lines)
+
+
+def _format_chat_photo_context(photo_context: dict) -> str:
+    if not photo_context or photo_context.get("enabled") is False:
+        return "未启用聊天照片；不要承诺会发自拍或生活照。"
+    lines = []
+    limit = int(photo_context.get("dailySuccessfulLimit") or 0)
+    sent_today = int(photo_context.get("sentToday") or 0)
+    remaining = int(photo_context.get("remainingToday") or 0)
+    allow_requested = photo_context.get("allowRequested") is not False
+    allow_proactive = photo_context.get("allowProactive") is True
+    lines.append(f"- 今日聊天照片额度：已成功发送 {sent_today}/{limit}，剩余额度 {remaining}。")
+    lines.append(f"- 用户明确要照片：{'允许' if allow_requested and remaining > 0 else '当前不允许或额度不足'}。")
+    lines.append(f"- 伴侣主动发照片：{'允许但必须非常克制' if allow_proactive and remaining > 0 else '当前不允许'}。")
+    if photo_context.get("minHoursBetweenPhotos"):
+        lines.append(f"- 两次成功发送至少间隔 {photo_context['minHoursBetweenPhotos']} 小时。")
+    active = photo_context.get("activeTask") or {}
+    if active:
+        prompt = active.get("prompt") if isinstance(active.get("prompt"), dict) else {}
+        bits = [
+            str(prompt.get("scene") or active.get("imagePrompt") or "").strip(),
+            str(prompt.get("outfit") or "").strip(),
+            str(prompt.get("pose") or "").strip(),
+        ]
+        lines.append(
+            "- 当前有未完成的照片承诺："
+            + "，".join(item for item in bits if item)
+            + f"；状态 {active.get('status') or '进行中'}。"
+        )
+        lines.append("- 如果用户继续聊天，要自然记得这件事；不要说“图片生成中”，可以说还在换衣服、找角度、刚才答应的那张等。")
+    else:
+        lines.append("- 如果用户明确要自拍/照片，可以自然答应但不要说已经发出；后端会决定是否创建照片任务。")
+    lines.append("- 不要机械提到额度、任务、生成、API、工具调用。额度不足时用伴侣口吻自然拒绝或留悬念。")
+    lines.append("- 一旦已经答应并开始拍照，后续聊天要保持连续性，不要像忘了这件事。")
     return "\n".join(lines)
 
 

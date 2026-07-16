@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../../app/theme.dart';
+import '../../../core/network/api_client.dart';
 import '../../environment/application/environment_service.dart';
 import '../../settings/data/settings_store.dart';
 import '../../settings/domain/app_settings.dart';
@@ -104,6 +106,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     });
   }
 
+  void _schedulePhotoRefreshes() {
+    for (final delay in const [
+      Duration(seconds: 6),
+      Duration(seconds: 18),
+      Duration(seconds: 36),
+    ]) {
+      Future<void>.delayed(delay, () async {
+        if (!mounted) return;
+        await _refreshFromServer(_settings, force: true);
+      });
+    }
+  }
+
   bool _isActiveStreamingMessage(ChatMessage message) {
     if (message.metadata['streamStatus'] != 'streaming') return false;
     return DateTime.now().difference(message.createdAt) <
@@ -196,6 +211,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       });
       await _cacheStore.saveMessages(next);
       _scrollToBottom(animated: true);
+      _schedulePhotoRefreshes();
     } catch (error) {
       if (!mounted) return;
       final failed = pending.copyWith(
@@ -328,6 +344,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                             return _MessageBubble(
                               message: message,
                               companion: companion,
+                              apiBaseUrl: _settings.apiBaseUrl,
                             );
                           },
                         ),
@@ -358,15 +375,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 }
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message, required this.companion});
+  const _MessageBubble({
+    required this.message,
+    required this.companion,
+    required this.apiBaseUrl,
+  });
 
   final ChatMessage message;
   final CompanionProfile companion;
+  final String apiBaseUrl;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.alicerColors;
     final isUser = message.isUser;
+    final imageUrl = (message.metadata['imageUrl'] ?? '').toString().trim();
     final bubbleColor =
         message.isError
             ? Theme.of(context).colorScheme.errorContainer
@@ -451,6 +474,10 @@ class _MessageBubble extends StatelessWidget {
                         ),
                         style: TextStyle(color: textColor, height: 1.48),
                       ),
+                      if (!isUser && imageUrl.isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        _ChatPhoto(apiBaseUrl: apiBaseUrl, imageUrl: imageUrl),
+                      ],
                     ],
                   ),
                 ),
@@ -466,6 +493,77 @@ class _MessageBubble extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _ChatPhoto extends StatefulWidget {
+  const _ChatPhoto({required this.apiBaseUrl, required this.imageUrl});
+
+  final String apiBaseUrl;
+  final String imageUrl;
+
+  @override
+  State<_ChatPhoto> createState() => _ChatPhotoState();
+}
+
+class _ChatPhotoState extends State<_ChatPhoto> {
+  late Future<Uint8List> _imageBytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _imageBytes = _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChatPhoto oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.apiBaseUrl != widget.apiBaseUrl ||
+        oldWidget.imageUrl != widget.imageUrl) {
+      _imageBytes = _load();
+    }
+  }
+
+  Future<Uint8List> _load() {
+    return ApiClient(baseUrl: widget.apiBaseUrl).getBytes(widget.imageUrl);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fallbackColor = Theme.of(context).colorScheme.surfaceContainerHighest;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: AspectRatio(
+        aspectRatio: 3 / 4,
+        child: FutureBuilder<Uint8List>(
+          future: _imageBytes,
+          builder: (context, snapshot) {
+            if (snapshot.hasData) {
+              return Image.memory(
+                snapshot.data!,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              );
+            }
+            if (snapshot.hasError) {
+              return Container(
+                color: fallbackColor,
+                child: const Icon(Icons.broken_image_outlined),
+              );
+            }
+            return Container(
+              color: fallbackColor,
+              child: const Center(
+                child: SizedBox.square(
+                  dimension: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }

@@ -74,6 +74,14 @@ DEFAULT_SETTINGS: dict = {
             "content": "用户当前现实状态：{{user.current}}",
         },
         {
+            "id": "chat_photo",
+            "title": "聊天照片",
+            "description": "聊天中自拍/生活照的承诺、额度和自然发送规则。",
+            "enabled": True,
+            "order": 52,
+            "content": "聊天照片规则：{{chat.photo}}",
+        },
+        {
             "id": "history_older",
             "title": "更早聊天历史",
             "description": "最新 20 条之前的历史，按上下文预算裁剪。",
@@ -144,6 +152,13 @@ DEFAULT_SETTINGS: dict = {
         "appUsage": False,
         "retentionDays": 2,
         "syncIntervalMinutes": 30,
+    },
+    "chatPhotos": {
+        "enabled": True,
+        "allowRequested": True,
+        "allowProactive": True,
+        "dailySuccessfulLimit": 1,
+        "minHoursBetweenPhotos": 12,
     },
     "model": {
         "provider": "deepseek",

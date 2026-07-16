@@ -51,6 +51,30 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at, id);
 
+                CREATE TABLE IF NOT EXISTS chat_photo_tasks (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'requested',
+                    requested_by_message_id TEXT NOT NULL DEFAULT '',
+                    assistant_text_message_id TEXT NOT NULL DEFAULT '',
+                    photo_message_id TEXT NOT NULL DEFAULT '',
+                    prompt_json TEXT NOT NULL DEFAULT '{}',
+                    image_prompt TEXT NOT NULL DEFAULT '',
+                    image_url TEXT NOT NULL DEFAULT '',
+                    caption TEXT NOT NULL DEFAULT '',
+                    date_key TEXT NOT NULL DEFAULT '',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL,
+                    started_at REAL,
+                    generated_at REAL,
+                    sent_at REAL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_photo_tasks_status
+                ON chat_photo_tasks(status, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_chat_photo_tasks_date
+                ON chat_photo_tasks(date_key, status, sent_at DESC);
+
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY,
                     kind TEXT NOT NULL,
@@ -407,6 +431,159 @@ class Database:
             "content": row["content"],
             "createdAt": row["created_at"],
             "metadata": json.loads(row["metadata_json"] or "{}"),
+        }
+
+    def create_chat_photo_task(
+        self,
+        *,
+        task_id: str,
+        source: str,
+        requested_by_message_id: str,
+        assistant_text_message_id: str,
+        prompt: dict,
+        image_prompt: str,
+        caption: str,
+        date_key: str,
+        metadata: dict | None = None,
+    ) -> dict:
+        now = time.time()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_photo_tasks(
+                    id, status, source, requested_by_message_id,
+                    assistant_text_message_id, prompt_json, image_prompt,
+                    caption, date_key, metadata_json, created_at, updated_at
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    task_id,
+                    "pending",
+                    source,
+                    requested_by_message_id,
+                    assistant_text_message_id,
+                    json.dumps(prompt, ensure_ascii=False),
+                    image_prompt,
+                    caption,
+                    date_key,
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+        return self.get_chat_photo_task(task_id) or {}
+
+    def update_chat_photo_task(
+        self,
+        task_id: str,
+        *,
+        status: str | None = None,
+        photo_message_id: str | None = None,
+        image_prompt: str | None = None,
+        image_url: str | None = None,
+        caption: str | None = None,
+        metadata: dict | None = None,
+        mark_started: bool = False,
+        mark_generated: bool = False,
+        mark_sent: bool = False,
+    ) -> dict | None:
+        current = self.get_chat_photo_task(task_id)
+        if current is None:
+            return None
+        next_metadata = {**dict(current.get("metadata") or {}), **(metadata or {})}
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE chat_photo_tasks
+                SET status = ?,
+                    photo_message_id = ?,
+                    image_prompt = ?,
+                    image_url = ?,
+                    caption = ?,
+                    metadata_json = ?,
+                    started_at = COALESCE(?, started_at),
+                    generated_at = COALESCE(?, generated_at),
+                    sent_at = COALESCE(?, sent_at),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status or current["status"],
+                    photo_message_id if photo_message_id is not None else current.get("photoMessageId", ""),
+                    image_prompt if image_prompt is not None else current.get("imagePrompt", ""),
+                    image_url if image_url is not None else current.get("imageUrl", ""),
+                    caption if caption is not None else current.get("caption", ""),
+                    json.dumps(next_metadata, ensure_ascii=False),
+                    time.time() if mark_started else None,
+                    time.time() if mark_generated else None,
+                    time.time() if mark_sent else None,
+                    time.time(),
+                    task_id,
+                ),
+            )
+        return self.get_chat_photo_task(task_id)
+
+    def get_chat_photo_task(self, task_id: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM chat_photo_tasks WHERE id = ?", (task_id,)).fetchone()
+        return self._chat_photo_task_row(row) if row is not None else None
+
+    def get_active_chat_photo_task(self) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM chat_photo_tasks
+                WHERE status IN ('pending', 'generating', 'generated')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return self._chat_photo_task_row(row) if row is not None else None
+
+    def count_sent_chat_photos_since(self, since: float) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM chat_photo_tasks
+                WHERE status = 'sent' AND sent_at >= ?
+                """,
+                (since,),
+            ).fetchone()
+        return int(row["count"] if row else 0)
+
+    def latest_sent_chat_photo(self) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM chat_photo_tasks
+                WHERE status = 'sent'
+                ORDER BY sent_at DESC, created_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return self._chat_photo_task_row(row) if row is not None else None
+
+    def _chat_photo_task_row(self, row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "status": row["status"],
+            "source": row["source"],
+            "requestedByMessageId": row["requested_by_message_id"],
+            "assistantTextMessageId": row["assistant_text_message_id"],
+            "photoMessageId": row["photo_message_id"],
+            "prompt": json.loads(row["prompt_json"] or "{}"),
+            "imagePrompt": row["image_prompt"],
+            "imageUrl": row["image_url"],
+            "caption": row["caption"],
+            "dateKey": row["date_key"],
+            "metadata": json.loads(row["metadata_json"] or "{}"),
+            "createdAt": row["created_at"],
+            "startedAt": row["started_at"],
+            "generatedAt": row["generated_at"],
+            "sentAt": row["sent_at"],
+            "updatedAt": row["updated_at"],
         }
 
     def list_memories(

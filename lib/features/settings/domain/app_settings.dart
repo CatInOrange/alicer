@@ -436,6 +436,71 @@ class LifeSettings {
   }
 }
 
+class ChatPhotoSettings {
+  const ChatPhotoSettings({
+    this.enabled = true,
+    this.allowRequested = true,
+    this.allowProactive = true,
+    this.dailySuccessfulLimit = 1,
+    this.minHoursBetweenPhotos = 12,
+  });
+
+  final bool enabled;
+  final bool allowRequested;
+  final bool allowProactive;
+  final int dailySuccessfulLimit;
+  final int minHoursBetweenPhotos;
+
+  factory ChatPhotoSettings.fromJson(Map<String, dynamic> json) {
+    return ChatPhotoSettings(
+      enabled: json['enabled'] != false,
+      allowRequested: json['allowRequested'] != false,
+      allowProactive: json['allowProactive'] != false,
+      dailySuccessfulLimit: _clampInt(json['dailySuccessfulLimit'], 1, 0, 5),
+      minHoursBetweenPhotos: _clampInt(
+        json['minHoursBetweenPhotos'],
+        12,
+        0,
+        72,
+      ),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'allowRequested': allowRequested,
+    'allowProactive': allowProactive,
+    'dailySuccessfulLimit': dailySuccessfulLimit,
+    'minHoursBetweenPhotos': minHoursBetweenPhotos,
+  };
+
+  ChatPhotoSettings copyWith({
+    bool? enabled,
+    bool? allowRequested,
+    bool? allowProactive,
+    int? dailySuccessfulLimit,
+    int? minHoursBetweenPhotos,
+  }) {
+    return ChatPhotoSettings(
+      enabled: enabled ?? this.enabled,
+      allowRequested: allowRequested ?? this.allowRequested,
+      allowProactive: allowProactive ?? this.allowProactive,
+      dailySuccessfulLimit: _clampInt(
+        dailySuccessfulLimit,
+        this.dailySuccessfulLimit,
+        0,
+        5,
+      ),
+      minHoursBetweenPhotos: _clampInt(
+        minHoursBetweenPhotos,
+        this.minHoursBetweenPhotos,
+        0,
+        72,
+      ),
+    );
+  }
+}
+
 String normalizeHistoryMode(String value) {
   return switch (value) {
     'recent' || 'day' || 'month' || 'all' => value,
@@ -547,6 +612,7 @@ class AlicerSettings {
     this.moments = const MomentsSettings(),
     this.life = const LifeSettings(),
     this.userTimeline = const UserTimelineSettings(),
+    this.chatPhotos = const ChatPhotoSettings(),
     this.model = const ModelSettings(),
   });
 
@@ -560,6 +626,7 @@ class AlicerSettings {
   final MomentsSettings moments;
   final LifeSettings life;
   final UserTimelineSettings userTimeline;
+  final ChatPhotoSettings chatPhotos;
   final ModelSettings model;
 
   factory AlicerSettings.fromJson(Map<String, dynamic> json) {
@@ -595,6 +662,9 @@ class AlicerSettings {
       userTimeline: UserTimelineSettings.fromJson(
         Map<String, dynamic>.from((json['userTimeline'] as Map?) ?? const {}),
       ),
+      chatPhotos: ChatPhotoSettings.fromJson(
+        Map<String, dynamic>.from((json['chatPhotos'] as Map?) ?? const {}),
+      ),
       model: ModelSettings.fromJson(
         Map<String, dynamic>.from((json['model'] as Map?) ?? const {}),
       ),
@@ -612,6 +682,7 @@ class AlicerSettings {
     'moments': moments.toJson(),
     'life': life.toJson(),
     'userTimeline': userTimeline.toJson(),
+    'chatPhotos': chatPhotos.toJson(),
     'model': model.toJson(),
   };
 
@@ -624,6 +695,7 @@ class AlicerSettings {
     'moments': moments.toJson(),
     'life': life.toJson(),
     'userTimeline': userTimeline.toJson(),
+    'chatPhotos': chatPhotos.toJson(),
     'model': model.toJson(),
   };
 
@@ -638,6 +710,7 @@ class AlicerSettings {
     MomentsSettings? moments,
     LifeSettings? life,
     UserTimelineSettings? userTimeline,
+    ChatPhotoSettings? chatPhotos,
     ModelSettings? model,
   }) {
     return AlicerSettings(
@@ -651,6 +724,7 @@ class AlicerSettings {
       moments: moments ?? this.moments,
       life: life ?? this.life,
       userTimeline: userTimeline ?? this.userTimeline,
+      chatPhotos: chatPhotos ?? this.chatPhotos,
       model: model ?? this.model,
     );
   }
@@ -678,6 +752,7 @@ IconData promptModuleIcon(String id) {
     'environment' => Icons.wb_sunny_outlined,
     'life_state' => Icons.timeline_outlined,
     'user_timeline' => Icons.phone_android_outlined,
+    'chat_photo' => Icons.add_a_photo_outlined,
     'history_older' => Icons.manage_history_outlined,
     'history_recent_20' => Icons.forum_outlined,
     'short_term_memory' => Icons.short_text_outlined,
@@ -759,6 +834,15 @@ const defaultPromptModules = <PromptModule>[
     content: '用户当前现实状态：{{user.current}}',
     enabled: true,
     order: 50,
+  ),
+  PromptModule(
+    id: 'chat_photo',
+    title: '聊天照片',
+    description: '聊天中自拍/生活照的承诺、额度和自然发送规则。',
+    icon: Icons.add_a_photo_outlined,
+    content: '聊天照片规则：{{chat.photo}}',
+    enabled: true,
+    order: 52,
   ),
   PromptModule(
     id: 'history_older',

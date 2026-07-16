@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..db import Database
+from ..services.chat_photo_service import build_chat_photo_context, schedule_chat_photo_decision
 from ..services.llm_service import LlmService
 from ..services.life_service import build_life_context
 from ..services.memory_service import maybe_process_memory_queue, memory_trigger_type, recall_memories
@@ -51,13 +52,16 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
             if message.get("id") != user_message.get("id")
         ]
         memories = recall_memories(db, text=text, limit=30)
+        life_context = build_life_context(db, settings)
+        user_context = build_user_timeline_context(db, settings)
         messages, prompt_debug = render_prompt(
             settings=settings,
             recent_messages=recent,
             memories=memories,
             environment=environment,
-            life_context=build_life_context(db, settings),
-            user_context=build_user_timeline_context(db, settings),
+            life_context=life_context,
+            user_context=user_context,
+            photo_context=build_chat_photo_context(db, settings),
         )
         messages.append({"role": "user", "content": text})
         reply = await llm.complete(messages=messages, model_settings=settings.get("model") or {})
@@ -73,6 +77,16 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
             settings=settings,
             user_message=user_message,
             assistant_message=assistant_message,
+        )
+        schedule_chat_photo_decision(
+            db,
+            llm,
+            settings=settings,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            recent_messages=[*recent, user_message, assistant_message],
+            life_context=life_context,
+            user_context=user_context,
         )
         return {
             "userMessage": user_message,
@@ -156,13 +170,16 @@ async def _run_stream_generation(
             if message.get("id") not in {assistant_id, user_message.get("id")}
         ]
         memories = recall_memories(db, text=text, limit=30)
+        life_context = build_life_context(db, settings)
+        user_context = build_user_timeline_context(db, settings)
         messages, prompt_debug = render_prompt(
             settings=settings,
             recent_messages=recent,
             memories=memories,
             environment=environment,
-            life_context=build_life_context(db, settings),
-            user_context=build_user_timeline_context(db, settings),
+            life_context=life_context,
+            user_context=user_context,
+            photo_context=build_chat_photo_context(db, settings),
         )
         messages.append({"role": "user", "content": text})
         last_persisted_at = time.monotonic()
@@ -190,6 +207,16 @@ async def _run_stream_generation(
             settings=settings,
             user_message=user_message,
             assistant_message=assistant_message,
+        )
+        schedule_chat_photo_decision(
+            db,
+            llm,
+            settings=settings,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            recent_messages=[*recent, user_message, assistant_message],
+            life_context=life_context,
+            user_context=user_context,
         )
         await queue.put(
             (
