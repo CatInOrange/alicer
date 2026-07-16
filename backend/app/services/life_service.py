@@ -7,6 +7,7 @@ import random
 from zoneinfo import ZoneInfo
 
 from ..db import Database, uuid_like
+from .life_fact_service import fact_constraints_for_life
 from .llm_service import LlmService
 from .prompt_service import merge_settings
 
@@ -60,6 +61,7 @@ def build_life_context(db: Database, settings: dict | None = None) -> dict:
         return {"enabled": False, "state": {}, "profile": {}, "plan": {}, "recentEvents": []}
     stored = db.get_life_state() or {}
     recent = list(reversed(db.list_life_events(limit=12)))
+    fact_constraints = fact_constraints_for_life(db, merged)
     return {
         "enabled": True,
         "profile": stored.get("profile") or _derive_profile_from_memories(db, merged)[0],
@@ -68,6 +70,7 @@ def build_life_context(db: Database, settings: dict | None = None) -> dict:
         "planDate": stored.get("planDate") or "",
         "profileUpdatedAt": stored.get("profileUpdatedAt"),
         "recentEvents": recent,
+        "factConstraints": fact_constraints,
     }
 
 
@@ -91,6 +94,7 @@ async def _advance_one_slot(
     plan = await _ensure_daily_plan(db, llm, settings=settings, profile=profile, slot=slot, stored=stored)
     previous_state = stored.get("state") or _default_state(settings)
     recent_events = list(reversed(db.list_life_events(limit=8)))
+    fact_constraints = fact_constraints_for_life(db, settings)
     event = await _generate_life_event(
         llm,
         settings=settings,
@@ -98,6 +102,7 @@ async def _advance_one_slot(
         plan=plan,
         previous_state=previous_state,
         recent_events=recent_events,
+        fact_constraints=fact_constraints,
         slot=slot,
     )
     normalized = _normalize_event(event, profile=profile, previous_state=previous_state, slot=slot)
@@ -120,9 +125,11 @@ async def _advance_one_slot(
             "plan": plan,
             "stabilityRules": [
                 "occupation/location/habits are derived from memories and settings",
+                "chat-derived life facts and commitments override random daily variation",
                 "today's events should follow the daily plan unless a small surprise is justified",
                 "hourly events may vary but must not rewrite stable facts",
             ],
+            "factConstraints": fact_constraints,
         },
     )
     db.save_life_state(
@@ -153,6 +160,7 @@ async def _generate_life_event(
     plan: dict,
     previous_state: dict,
     recent_events: list[dict],
+    fact_constraints: dict,
     slot: dt.datetime,
 ) -> dict:
     companion = str(((settings.get("companion") or {}).get("name") or "Alice")).strip() or "Alice"
@@ -181,6 +189,7 @@ async def _generate_life_event(
                     "weekday": "一二三四五六日"[slot.weekday()],
                     "profile": profile,
                     "todayPlan": plan or "暂无",
+                    "lifeFactConstraints": fact_constraints.get("summary") or "暂无",
                     "previousState": previous_state,
                     "recentEvents": recent_text or "暂无",
                     "randomness": (settings.get("life") or {}).get("randomness", 0.62),
@@ -240,6 +249,7 @@ async def _ensure_daily_plan(
         profile=profile,
         slot=slot,
         recent_events=recent_events,
+        fact_constraints=fact_constraints_for_life(db, settings),
     )
     plan["date"] = day
     return plan
@@ -252,6 +262,7 @@ async def _generate_daily_plan(
     profile: dict,
     slot: dt.datetime,
     recent_events: list[dict],
+    fact_constraints: dict,
 ) -> dict:
     companion = str(((settings.get("companion") or {}).get("name") or "Alice")).strip() or "Alice"
     recent_text = "\n".join(
@@ -264,6 +275,7 @@ async def _generate_daily_plan(
             "content": (
                 f"你是 Alicer 的日计划器，给{companion}生成今天的生活骨架。"
                 "只输出合法 JSON。计划必须服从 profile 中的职业、住处、作息和常去地点。"
+                "同时必须服从 lifeFactConstraints 中来自聊天和记忆的未来安排、承诺和当前事实。"
                 "不要写成用户的行程。字段：dayTheme, plannedEvents, possibleSurprises, constraints。"
                 "plannedEvents 每项包含 timeRange, activity, location, intent。"
             ),
@@ -276,6 +288,7 @@ async def _generate_daily_plan(
                     "weekday": "一二三四五六日"[slot.weekday()],
                     "profile": profile,
                     "recentEvents": recent_text or "暂无",
+                    "lifeFactConstraints": fact_constraints.get("summary") or "暂无",
                 },
                 ensure_ascii=False,
             ),

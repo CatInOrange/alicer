@@ -94,6 +94,23 @@ class ApiClient {
     return _decodeResponse(response);
   }
 
+  Future<Map<String, dynamic>> patchJson(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    final response = await _httpClient
+        .patch(
+          uri(path),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode(body),
+        )
+        .timeout(const Duration(seconds: 30));
+    return _decodeResponse(response);
+  }
+
   Future<Map<String, dynamic>> deleteJson(String path) async {
     final response = await _httpClient
         .delete(uri(path), headers: {'Accept': 'application/json'})

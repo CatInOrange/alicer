@@ -750,6 +750,7 @@ IconData promptModuleIcon(String id) {
     'reply_style' => Icons.chat_outlined,
     'emoji_style' => Icons.emoji_emotions_outlined,
     'environment' => Icons.wb_sunny_outlined,
+    'world_context' => Icons.account_tree_outlined,
     'life_state' => Icons.timeline_outlined,
     'user_timeline' => Icons.phone_android_outlined,
     'chat_photo' => Icons.add_a_photo_outlined,
@@ -824,7 +825,19 @@ const defaultPromptModules = <PromptModule>[
     icon: Icons.timeline_outlined,
     content: '伴侣自己的生活状态：{{life.current}}',
     enabled: true,
-    order: 45,
+    order: 46,
+  ),
+  PromptModule(
+    id: 'world_context',
+    title: '一致性事实账本',
+    description: '聊天、朋友圈、生活模拟共同遵守的承诺、计划和稳定事实。',
+    icon: Icons.account_tree_outlined,
+    content:
+        '当前世界状态：\n{{world.current}}\n\n'
+        '未完成承诺与计划：\n{{world.commitments}}\n\n'
+        '{{world.guardrails}}',
+    enabled: true,
+    order: 44,
   ),
   PromptModule(
     id: 'user_timeline',

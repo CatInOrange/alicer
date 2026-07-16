@@ -55,6 +55,7 @@ def schedule_chat_photo_decision(
     recent_messages: list[dict],
     life_context: dict,
     user_context: dict,
+    world_context: dict | None = None,
 ) -> None:
     task = asyncio.create_task(
         maybe_create_chat_photo_task(
@@ -66,6 +67,7 @@ def schedule_chat_photo_decision(
             recent_messages=recent_messages,
             life_context=life_context,
             user_context=user_context,
+            world_context=world_context or {},
         )
     )
     PHOTO_TASKS.add(task)
@@ -82,6 +84,7 @@ async def maybe_create_chat_photo_task(
     recent_messages: list[dict],
     life_context: dict,
     user_context: dict,
+    world_context: dict | None = None,
 ) -> dict | None:
     config = chat_photo_settings(settings)
     if not config["enabled"] or not getattr(llm.settings, "image_api_key", ""):
@@ -98,6 +101,7 @@ async def maybe_create_chat_photo_task(
         recent_messages=recent_messages,
         life_context=life_context,
         user_context=user_context,
+        world_context=world_context or {},
         quota=guard,
     )
     if decision.get("action") != "send_companion_photo":
@@ -194,6 +198,7 @@ async def _photo_director_decision(
     recent_messages: list[dict],
     life_context: dict,
     user_context: dict,
+    world_context: dict,
     quota: dict,
 ) -> dict:
     companion = str(((settings.get("companion") or {}).get("name") or "Alice")).strip() or "Alice"
@@ -228,6 +233,7 @@ async def _photo_director_decision(
                 f"配置：允许用户请求={config['allowRequested']}，允许主动={config['allowProactive']}，"
                 f"每日成功发送上限={config['dailySuccessfulLimit']}，最小间隔小时={config['minHoursBetweenPhotos']}\n"
                 f"当前额度：{json.dumps(quota, ensure_ascii=False)}\n"
+                f"统一生活事实：{json.dumps((world_context or {}).get('activeFacts') or [], ensure_ascii=False)[:1600]}\n"
                 f"伴侣生活状态：{json.dumps(life_context.get('state') or {}, ensure_ascii=False)[:1200]}\n"
                 f"用户现实状态：{json.dumps(user_context.get('state') or {}, ensure_ascii=False)[:1200]}\n"
                 f"最近聊天：\n{history or '暂无'}\n\n"

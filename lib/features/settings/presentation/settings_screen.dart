@@ -40,14 +40,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isRestartingBackend = false;
   bool _isLoadingLife = false;
   bool _isAdvancingLife = false;
+  bool _isLoadingLifeFacts = false;
+  bool _isCleaningLifeFacts = false;
   bool _isLoadingUserTimeline = false;
   bool _isSyncingUserTimeline = false;
   String _environmentStatus = '尚未读取';
   String _backendStatus = '未检测';
   String _lifeStatus = '尚未读取';
+  String _lifeFactsStatus = '尚未读取';
   String _userTimelineStatus = '尚未读取';
   Map<String, dynamic>? _lifeContext;
   List<Map<String, dynamic>> _lifeEvents = const [];
+  List<Map<String, dynamic>> _lifeFacts = const [];
+  Map<String, dynamic>? _lifeFactAudit;
   Map<String, dynamic>? _userTimelineContext;
   List<Map<String, dynamic>> _userTimelineEvents = const [];
 
@@ -74,6 +79,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isLoading = false);
     unawaited(_checkBackend());
     unawaited(_loadLifeRecords());
+    unawaited(_loadLifeFacts());
     unawaited(_loadUserTimeline());
     unawaited(_userTimelineService.configureBackground(settings));
   }
@@ -553,6 +559,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     isAdvancing: _isAdvancingLife,
                     onRefresh: _loadLifeRecords,
                     onAdvance: _advanceLifeOnce,
+                  ),
+                  const SizedBox(height: 18),
+                  _LifeFactsPanel(
+                    facts: _lifeFacts,
+                    audit: _lifeFactAudit,
+                    status: _lifeFactsStatus,
+                    isLoading: _isLoadingLifeFacts,
+                    isCleaning: _isCleaningLifeFacts,
+                    onRefresh: _loadLifeFacts,
+                    onCleanup: _cleanupLifeFacts,
+                    onCreate: _createLifeFact,
+                    onEdit: _editLifeFact,
+                    onComplete: _completeLifeFact,
+                    onCancel: _cancelLifeFact,
                   ),
                 ],
               ),
@@ -1131,6 +1151,327 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _loadLifeFacts() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingLifeFacts = true;
+      _lifeFactsStatus = '读取中...';
+    });
+    try {
+      final response = await ApiClient(
+        baseUrl: _currentApiBaseUrl(),
+      ).getJson('/api/life/facts', {'status': 'all', 'limit': '80'});
+      final facts = ((response['facts'] as List?) ?? const <dynamic>[])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList(growable: false);
+      final audit = Map<String, dynamic>.from(
+        (response['audit'] as Map?) ?? const {},
+      );
+      if (!mounted) return;
+      setState(() {
+        _lifeFacts = facts;
+        _lifeFactAudit = audit;
+        _lifeFactsStatus = '已读取 ${facts.length} 条事实';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _lifeFactsStatus = '读取失败：$error');
+    } finally {
+      if (mounted) setState(() => _isLoadingLifeFacts = false);
+    }
+  }
+
+  Future<void> _cleanupLifeFacts() async {
+    if (_isCleaningLifeFacts) return;
+    setState(() {
+      _isCleaningLifeFacts = true;
+      _lifeFactsStatus = '正在清理事实账本...';
+    });
+    try {
+      await ApiClient(
+        baseUrl: _currentApiBaseUrl(),
+      ).postJson('/api/life/facts/cleanup', const {});
+      await _loadLifeFacts();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _lifeFactsStatus = '清理失败：$error');
+    } finally {
+      if (mounted) setState(() => _isCleaningLifeFacts = false);
+    }
+  }
+
+  Future<void> _createLifeFact() async {
+    final payload = await _showLifeFactEditor();
+    if (payload == null) return;
+    try {
+      await ApiClient(baseUrl: _currentApiBaseUrl()).postJson(
+        '/api/life/facts',
+        payload,
+        timeout: const Duration(seconds: 30),
+      );
+      await _loadLifeFacts();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('创建事实失败：$error')));
+    }
+  }
+
+  Future<void> _editLifeFact(Map<String, dynamic> fact) async {
+    final id = _readString(fact, 'id');
+    if (id.isEmpty) return;
+    final payload = await _showLifeFactEditor(fact: fact);
+    if (payload == null) return;
+    try {
+      await ApiClient(
+        baseUrl: _currentApiBaseUrl(),
+      ).patchJson('/api/life/facts/$id', payload);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('更新事实失败：$error')));
+      return;
+    }
+    await _loadLifeFacts();
+  }
+
+  Future<void> _completeLifeFact(Map<String, dynamic> fact) async {
+    await _setLifeFactTerminalStatus(fact, action: 'complete', label: '完成');
+  }
+
+  Future<void> _cancelLifeFact(Map<String, dynamic> fact) async {
+    await _setLifeFactTerminalStatus(fact, action: 'cancel', label: '取消');
+  }
+
+  Future<void> _setLifeFactTerminalStatus(
+    Map<String, dynamic> fact, {
+    required String action,
+    required String label,
+  }) async {
+    final id = _readString(fact, 'id');
+    if (id.isEmpty) return;
+    try {
+      await ApiClient(
+        baseUrl: _currentApiBaseUrl(),
+      ).postJson('/api/life/facts/$id/$action', const {});
+      await _loadLifeFacts();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$label事实失败：$error')));
+    }
+  }
+
+  Future<Map<String, dynamic>?> _showLifeFactEditor({
+    Map<String, dynamic>? fact,
+  }) async {
+    final titleController = TextEditingController(
+      text: _readString(fact ?? const {}, 'title'),
+    );
+    final summaryController = TextEditingController(
+      text: _readString(fact ?? const {}, 'summary'),
+    );
+    final startController = TextEditingController(
+      text: _formatFactTimeInput((fact ?? const {})['startsAt']),
+    );
+    final endController = TextEditingController(
+      text: _formatFactTimeInput((fact ?? const {})['endsAt']),
+    );
+    var type = _normalizeFactType(_readString(fact ?? const {}, 'type'));
+    var status = _normalizeFactStatus(_readString(fact ?? const {}, 'status'));
+    final result = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  0,
+                  16,
+                  16 + MediaQuery.of(context).viewInsets.bottom,
+                ),
+                child: SizedBox(
+                  height: MediaQuery.of(context).size.height * 0.72,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        fact == null ? '新增生活事实' : '编辑生活事实',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              value: type,
+                              decoration: const InputDecoration(
+                                labelText: '类型',
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: 'schedule_commitment',
+                                  child: Text('日程/计划'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'relationship_commitment',
+                                  child: Text('关系承诺'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'current_state',
+                                  child: Text('当前状态'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'profile_fact',
+                                  child: Text('稳定设定'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'life_event_hint',
+                                  child: Text('生活线索'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'moment_posted',
+                                  child: Text('朋友圈已发'),
+                                ),
+                              ],
+                              onChanged:
+                                  (value) =>
+                                      setSheetState(() => type = value ?? type),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              value: status,
+                              decoration: const InputDecoration(
+                                labelText: '状态',
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: 'candidate',
+                                  child: Text('候选'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'planned',
+                                  child: Text('计划中'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'active',
+                                  child: Text('正在发生'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'completed',
+                                  child: Text('已完成'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'cancelled',
+                                  child: Text('已取消'),
+                                ),
+                              ],
+                              onChanged:
+                                  (value) => setSheetState(
+                                    () => status = value ?? status,
+                                  ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: titleController,
+                        decoration: const InputDecoration(labelText: '标题'),
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: summaryController,
+                          expands: true,
+                          minLines: null,
+                          maxLines: null,
+                          textAlignVertical: TextAlignVertical.top,
+                          decoration: const InputDecoration(labelText: '摘要'),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: startController,
+                              decoration: const InputDecoration(
+                                labelText: '开始时间',
+                                helperText: '例：2026-07-17T18:30',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextField(
+                              controller: endController,
+                              decoration: const InputDecoration(
+                                labelText: '结束时间',
+                                helperText: '可留空',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          TextButton.icon(
+                            onPressed: () => Navigator.of(context).pop(),
+                            icon: const Icon(Icons.close_rounded, size: 18),
+                            label: const Text('取消'),
+                          ),
+                          const Spacer(),
+                          FilledButton.icon(
+                            onPressed: () {
+                              final title = titleController.text.trim();
+                              final summary = summaryController.text.trim();
+                              if (title.isEmpty && summary.isEmpty) return;
+                              Navigator.of(context).pop({
+                                'type': type,
+                                'status': status,
+                                'title': title,
+                                'summary': summary,
+                                if (startController.text.trim().isNotEmpty)
+                                  'startsAt': startController.text.trim(),
+                                if (endController.text.trim().isNotEmpty)
+                                  'endsAt': endController.text.trim(),
+                                'confidence': 0.88,
+                                'importance': 0.72,
+                              });
+                            },
+                            icon: const Icon(Icons.check_rounded, size: 18),
+                            label: const Text('保存'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+    titleController.dispose();
+    summaryController.dispose();
+    startController.dispose();
+    endController.dispose();
+    return result;
+  }
+
   Future<void> _advanceLifeOnce() async {
     if (_isAdvancingLife) return;
     setState(() {
@@ -1144,6 +1485,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'settings': _settings.toBackendJson(),
       }, timeout: const Duration(seconds: 75));
       await _loadLifeRecords();
+      unawaited(_loadLifeFacts());
     } catch (error) {
       if (!mounted) return;
       setState(() => _lifeStatus = '推进失败：$error');
@@ -1469,6 +1811,276 @@ class _LifeRecordsPanel extends StatelessWidget {
   }
 }
 
+class _LifeFactsPanel extends StatelessWidget {
+  const _LifeFactsPanel({
+    required this.facts,
+    required this.audit,
+    required this.status,
+    required this.isLoading,
+    required this.isCleaning,
+    required this.onRefresh,
+    required this.onCleanup,
+    required this.onCreate,
+    required this.onEdit,
+    required this.onComplete,
+    required this.onCancel,
+  });
+
+  final List<Map<String, dynamic>> facts;
+  final Map<String, dynamic>? audit;
+  final String status;
+  final bool isLoading;
+  final bool isCleaning;
+  final VoidCallback onRefresh;
+  final VoidCallback onCleanup;
+  final VoidCallback onCreate;
+  final ValueChanged<Map<String, dynamic>> onEdit;
+  final ValueChanged<Map<String, dynamic>> onComplete;
+  final ValueChanged<Map<String, dynamic>> onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final warnings = ((audit?['warnings'] as List?) ?? const <dynamic>[])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: false);
+    final counts = Map<String, dynamic>.from(
+      (audit?['counts'] as Map?) ?? const {},
+    );
+    final activeFacts = facts
+        .where((item) {
+          final status = _readString(item, 'status');
+          return status == 'candidate' ||
+              status == 'planned' ||
+              status == 'active';
+        })
+        .toList(growable: false);
+    final historyFacts = facts.where((item) => !activeFacts.contains(item));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '生活事实账本',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            IconButton(
+              tooltip: '新增事实',
+              onPressed: onCreate,
+              icon: const Icon(Icons.add_rounded),
+            ),
+            IconButton(
+              tooltip: '清理过期事实',
+              onPressed: isCleaning ? null : onCleanup,
+              icon:
+                  isCleaning
+                      ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                      : const Icon(Icons.cleaning_services_outlined),
+            ),
+            IconButton(
+              tooltip: '刷新',
+              onPressed: isLoading ? null : onRefresh,
+              icon:
+                  isLoading
+                      ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                      : const Icon(Icons.refresh_rounded),
+            ),
+          ],
+        ),
+        Text(status, style: Theme.of(context).textTheme.bodySmall),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final entry in counts.entries)
+              _LifeFactChip(
+                label: _factStatusLabel(entry.key),
+                value: '${entry.value}',
+              ),
+            if (warnings.isNotEmpty)
+              _LifeFactChip(label: '审计提醒', value: '${warnings.length}'),
+          ],
+        ),
+        if (warnings.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          for (final warning in warnings.take(3))
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                _readString(warning, 'message', fallback: '有事实需要检查。'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+            ),
+        ],
+        const SizedBox(height: 10),
+        if (facts.isEmpty)
+          Text('暂无生活事实。', style: Theme.of(context).textTheme.bodySmall)
+        else
+          Column(
+            children: [
+              for (final fact in activeFacts.take(40))
+                _LifeFactRow(
+                  fact: fact,
+                  onEdit: () => onEdit(fact),
+                  onComplete: () => onComplete(fact),
+                  onCancel: () => onCancel(fact),
+                ),
+              if (historyFacts.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '历史事实',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+                for (final fact in historyFacts.take(24))
+                  _LifeFactRow(
+                    fact: fact,
+                    muted: true,
+                    onEdit: () => onEdit(fact),
+                    onComplete: () => onComplete(fact),
+                    onCancel: () => onCancel(fact),
+                  ),
+              ],
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+class _LifeFactRow extends StatelessWidget {
+  const _LifeFactRow({
+    required this.fact,
+    required this.onEdit,
+    required this.onComplete,
+    required this.onCancel,
+    this.muted = false,
+  });
+
+  final Map<String, dynamic> fact;
+  final VoidCallback onEdit;
+  final VoidCallback onComplete;
+  final VoidCallback onCancel;
+  final bool muted;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    final status = _readString(fact, 'status', fallback: 'candidate');
+    final type = _readString(fact, 'type');
+    final title = _readString(fact, 'title', fallback: '未命名事实');
+    final summary = _readString(fact, 'summary');
+    final timeWindow = _readString(fact, 'timeWindow');
+    final isTerminal =
+        status == 'completed' ||
+        status == 'cancelled' ||
+        status == 'superseded' ||
+        status == 'expired' ||
+        status == 'archived';
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onEdit,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Icon(
+                  _lifeFactIcon(type),
+                  size: 18,
+                  color:
+                      muted
+                          ? colors.textMuted
+                          : Theme.of(context).colorScheme.primary,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        color: muted ? colors.textMuted : null,
+                      ),
+                    ),
+                    if (summary.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        summary,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: muted ? colors.textMuted : null,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 3),
+                    Text(
+                      _joinFilled([
+                        _factTypeLabel(type),
+                        _factStatusLabel(status),
+                        timeWindow,
+                        '置信度 ${_formatEnergy(fact['confidence'])}',
+                      ], separator: ' · '),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: colors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              PopupMenuButton<String>(
+                tooltip: '事实操作',
+                icon: const Icon(Icons.more_horiz_rounded),
+                onSelected: (value) {
+                  if (value == 'edit') onEdit();
+                  if (value == 'complete') onComplete();
+                  if (value == 'cancel') onCancel();
+                },
+                itemBuilder:
+                    (context) => [
+                      const PopupMenuItem(value: 'edit', child: Text('编辑')),
+                      if (!isTerminal)
+                        const PopupMenuItem(
+                          value: 'complete',
+                          child: Text('标记完成'),
+                        ),
+                      if (!isTerminal)
+                        const PopupMenuItem(
+                          value: 'cancel',
+                          child: Text('取消事实'),
+                        ),
+                    ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _UserTimelinePanel extends StatelessWidget {
   const _UserTimelinePanel({
     required this.contextData,
@@ -1681,6 +2293,94 @@ IconData _userTimelineIcon(String eventType) {
   if (eventType.startsWith('motion')) return Icons.directions_walk_outlined;
   if (eventType.startsWith('device_headset')) return Icons.headphones_outlined;
   return Icons.phone_android_outlined;
+}
+
+IconData _lifeFactIcon(String factType) {
+  switch (factType) {
+    case 'schedule_commitment':
+      return Icons.event_available_outlined;
+    case 'relationship_commitment':
+      return Icons.favorite_border_rounded;
+    case 'current_state':
+      return Icons.my_location_outlined;
+    case 'profile_fact':
+      return Icons.badge_outlined;
+    case 'life_event_hint':
+      return Icons.lightbulb_outline_rounded;
+    case 'moment_posted':
+      return Icons.photo_camera_back_outlined;
+  }
+  return Icons.account_tree_outlined;
+}
+
+String _factTypeLabel(String factType) {
+  switch (factType) {
+    case 'schedule_commitment':
+      return '日程/计划';
+    case 'relationship_commitment':
+      return '关系承诺';
+    case 'current_state':
+      return '当前状态';
+    case 'profile_fact':
+      return '稳定设定';
+    case 'life_event_hint':
+      return '生活线索';
+    case 'moment_posted':
+      return '朋友圈已发';
+  }
+  return factType.isEmpty ? '事实' : factType;
+}
+
+String _factStatusLabel(String status) {
+  switch (status) {
+    case 'candidate':
+      return '候选';
+    case 'planned':
+      return '计划中';
+    case 'active':
+      return '正在发生';
+    case 'completed':
+      return '已完成';
+    case 'cancelled':
+      return '已取消';
+    case 'superseded':
+      return '已替代';
+    case 'expired':
+      return '已过期';
+    case 'archived':
+      return '已归档';
+  }
+  return status.isEmpty ? '未知' : status;
+}
+
+String _normalizeFactType(String value) {
+  const allowed = {
+    'schedule_commitment',
+    'relationship_commitment',
+    'current_state',
+    'profile_fact',
+    'life_event_hint',
+    'moment_posted',
+  };
+  return allowed.contains(value) ? value : 'schedule_commitment';
+}
+
+String _normalizeFactStatus(String value) {
+  const allowed = {'candidate', 'planned', 'active', 'completed', 'cancelled'};
+  return allowed.contains(value) ? value : 'candidate';
+}
+
+String _formatFactTimeInput(Object? value) {
+  final number =
+      value is num
+          ? value.toDouble()
+          : double.tryParse(value?.toString() ?? '');
+  if (number == null || number <= 0) return '';
+  final date =
+      DateTime.fromMillisecondsSinceEpoch((number * 1000).round()).toLocal();
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${date.year}-${two(date.month)}-${two(date.day)}T'
+      '${two(date.hour)}:${two(date.minute)}';
 }
 
 class _LifeFactChip extends StatelessWidget {

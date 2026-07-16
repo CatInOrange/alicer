@@ -164,6 +164,30 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_life_events_time
                 ON life_events(event_time DESC, id DESC);
 
+                CREATE TABLE IF NOT EXISTS life_facts (
+                    id TEXT PRIMARY KEY,
+                    fact_type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'candidate',
+                    title TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL DEFAULT '',
+                    starts_at REAL,
+                    ends_at REAL,
+                    expires_at REAL,
+                    confidence REAL NOT NULL DEFAULT 0.7,
+                    importance REAL NOT NULL DEFAULT 0.5,
+                    source TEXT NOT NULL DEFAULT '',
+                    source_message_id TEXT NOT NULL DEFAULT '',
+                    related_json TEXT NOT NULL DEFAULT '{}',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    supersedes_id TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_life_facts_status_time
+                ON life_facts(status, starts_at, expires_at, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_life_facts_source_message
+                ON life_facts(source_message_id);
+
                 CREATE TABLE IF NOT EXISTS user_timeline_state (
                     id TEXT PRIMARY KEY,
                     state_json TEXT NOT NULL DEFAULT '{}',
@@ -295,6 +319,13 @@ class Database:
                 {
                     "used_for_moment_at": "REAL",
                     "used_moment_id": "TEXT NOT NULL DEFAULT ''",
+                },
+            )
+            self._ensure_columns(
+                conn,
+                "life_facts",
+                {
+                    "supersedes_id": "TEXT NOT NULL DEFAULT ''",
                 },
             )
             conn.execute(
@@ -1055,6 +1086,241 @@ class Database:
                 (event_time,),
             ).fetchone()
         return self._life_event_row(row) if row is not None else None
+
+    def upsert_life_fact(
+        self,
+        *,
+        fact_id: str,
+        fact_type: str,
+        status: str,
+        title: str,
+        summary: str,
+        starts_at: float | None = None,
+        ends_at: float | None = None,
+        expires_at: float | None = None,
+        confidence: float = 0.7,
+        importance: float = 0.5,
+        source: str = "",
+        source_message_id: str = "",
+        related: dict | None = None,
+        metadata: dict | None = None,
+        supersedes_id: str = "",
+    ) -> dict:
+        now = time.time()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO life_facts(
+                    id, fact_type, status, title, summary, starts_at, ends_at,
+                    expires_at, confidence, importance, source, source_message_id,
+                    related_json, metadata_json, supersedes_id, created_at, updated_at
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    fact_type=excluded.fact_type,
+                    status=excluded.status,
+                    title=excluded.title,
+                    summary=excluded.summary,
+                    starts_at=excluded.starts_at,
+                    ends_at=excluded.ends_at,
+                    expires_at=excluded.expires_at,
+                    confidence=excluded.confidence,
+                    importance=excluded.importance,
+                    source=excluded.source,
+                    source_message_id=excluded.source_message_id,
+                    related_json=excluded.related_json,
+                    metadata_json=excluded.metadata_json,
+                    supersedes_id=excluded.supersedes_id,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    fact_id,
+                    fact_type[:80],
+                    status[:40],
+                    title[:200],
+                    summary[:1000],
+                    starts_at,
+                    ends_at,
+                    expires_at,
+                    max(0.0, min(1.0, float(confidence))),
+                    max(0.0, min(1.0, float(importance))),
+                    source[:80],
+                    source_message_id[:120],
+                    json.dumps(related or {}, ensure_ascii=False),
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    supersedes_id[:120],
+                    now,
+                    now,
+                ),
+            )
+        return self.get_life_fact(fact_id) or {}
+
+    def update_life_fact_status(
+        self,
+        fact_id: str,
+        *,
+        status: str,
+        metadata: dict | None = None,
+        supersedes_id: str | None = None,
+    ) -> dict | None:
+        current = self.get_life_fact(fact_id)
+        if current is None:
+            return None
+        next_metadata = {**dict(current.get("metadata") or {}), **(metadata or {})}
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE life_facts
+                SET status = ?,
+                    metadata_json = ?,
+                    supersedes_id = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    json.dumps(next_metadata, ensure_ascii=False),
+                    supersedes_id if supersedes_id is not None else current.get("supersedesId", ""),
+                    time.time(),
+                    fact_id,
+                ),
+            )
+        return self.get_life_fact(fact_id)
+
+    def update_life_fact(
+        self,
+        fact_id: str,
+        *,
+        fact_type: str | None = None,
+        status: str | None = None,
+        title: str | None = None,
+        summary: str | None = None,
+        starts_at: float | None = None,
+        ends_at: float | None = None,
+        expires_at: float | None = None,
+        confidence: float | None = None,
+        importance: float | None = None,
+        related: dict | None = None,
+        metadata: dict | None = None,
+        supersedes_id: str | None = None,
+    ) -> dict | None:
+        current = self.get_life_fact(fact_id)
+        if current is None:
+            return None
+        next_related = {**dict(current.get("related") or {}), **(related or {})}
+        next_metadata = {**dict(current.get("metadata") or {}), **(metadata or {})}
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE life_facts
+                SET fact_type = ?,
+                    status = ?,
+                    title = ?,
+                    summary = ?,
+                    starts_at = ?,
+                    ends_at = ?,
+                    expires_at = ?,
+                    confidence = ?,
+                    importance = ?,
+                    related_json = ?,
+                    metadata_json = ?,
+                    supersedes_id = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    (fact_type or current.get("type") or "")[:80],
+                    (status or current.get("status") or "candidate")[:40],
+                    (title if title is not None else current.get("title") or "")[:200],
+                    (summary if summary is not None else current.get("summary") or "")[:1000],
+                    starts_at if starts_at is not None else current.get("startsAt"),
+                    ends_at if ends_at is not None else current.get("endsAt"),
+                    expires_at if expires_at is not None else current.get("expiresAt"),
+                    max(0.0, min(1.0, float(confidence if confidence is not None else current.get("confidence") or 0.7))),
+                    max(0.0, min(1.0, float(importance if importance is not None else current.get("importance") or 0.5))),
+                    json.dumps(next_related, ensure_ascii=False),
+                    json.dumps(next_metadata, ensure_ascii=False),
+                    (supersedes_id if supersedes_id is not None else current.get("supersedesId") or "")[:120],
+                    time.time(),
+                    fact_id,
+                ),
+            )
+        return self.get_life_fact(fact_id)
+
+    def get_life_fact(self, fact_id: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM life_facts WHERE id = ?", (fact_id,)).fetchone()
+        return self._life_fact_row(row) if row is not None else None
+
+    def list_life_facts(
+        self,
+        *,
+        statuses: list[str] | tuple[str, ...] | None = None,
+        limit: int = 40,
+        include_expired: bool = False,
+    ) -> list[dict]:
+        params: list[object] = []
+        query = "SELECT * FROM life_facts WHERE 1=1"
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(statuses)
+        if not include_expired:
+            query += " AND (expires_at IS NULL OR expires_at >= ?)"
+            params.append(time.time())
+        query += """
+            ORDER BY
+                CASE status
+                    WHEN 'active' THEN 0
+                    WHEN 'planned' THEN 1
+                    WHEN 'candidate' THEN 2
+                    ELSE 3
+                END,
+                COALESCE(starts_at, updated_at) ASC,
+                importance DESC,
+                updated_at DESC
+            LIMIT ?
+        """
+        params.append(max(1, min(limit, 200)))
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._life_fact_row(row) for row in rows]
+
+    def expire_life_facts(self, *, now: float | None = None) -> int:
+        value = now or time.time()
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE life_facts
+                SET status = 'expired', updated_at = ?
+                WHERE status IN ('candidate', 'planned', 'active')
+                  AND expires_at IS NOT NULL
+                  AND expires_at < ?
+                """,
+                (value, value),
+            )
+            return int(cur.rowcount or 0)
+
+    def _life_fact_row(self, row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "type": row["fact_type"],
+            "status": row["status"],
+            "title": row["title"],
+            "summary": row["summary"],
+            "startsAt": row["starts_at"],
+            "endsAt": row["ends_at"],
+            "expiresAt": row["expires_at"],
+            "confidence": row["confidence"],
+            "importance": row["importance"],
+            "source": row["source"],
+            "sourceMessageId": row["source_message_id"],
+            "related": json.loads(row["related_json"] or "{}"),
+            "metadata": json.loads(row["metadata_json"] or "{}"),
+            "supersedesId": row["supersedes_id"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
 
     def get_user_timeline_state(self) -> dict | None:
         with self.connect() as conn:

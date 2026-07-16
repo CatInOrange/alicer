@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
-from ..db import Database
+from ..db import Database, uuid_like
 from ..services.life_service import advance_life_until_now, choose_moment_life_event
 from ..services.llm_service import GROK_REFERENCE_IMAGE_URL, LlmService
 from ..services.prompt_service import merge_settings
@@ -271,7 +271,7 @@ async def _generate_moment(
     moment_id = f"mom_{uuid.uuid4().hex}"
     if life_event and life_event.get("id"):
         life_event = db.mark_life_event_used_for_moment(str(life_event["id"]), moment_id) or life_event
-    return db.add_moment(
+    moment = db.add_moment(
         moment_id=moment_id,
         author=companion,
         content=content,
@@ -290,9 +290,25 @@ async def _generate_moment(
             "relationshipStage": strategy["relationshipStage"],
             "engagementMemory": strategy["engagementMemory"],
             "environmentCue": strategy["environmentCue"],
+            "factConstraints": (life_result.get("context") or {}).get("factConstraints") or {},
             "moodTag": mood_tag,
         },
     )
+    db.upsert_life_fact(
+        fact_id=f"fact_{uuid_like()}",
+        fact_type="moment_posted",
+        status="active",
+        title="刚发布了一条朋友圈",
+        summary=f"{companion}刚发布朋友圈：{content[:160]}",
+        starts_at=dt.datetime.now(TZ).timestamp(),
+        expires_at=(dt.datetime.now(TZ) + dt.timedelta(hours=72)).timestamp(),
+        confidence=0.95,
+        importance=0.58,
+        source="moments",
+        related={"momentId": moment.get("id"), "lifeEventId": (life_event or {}).get("id")},
+        metadata={"imageUrl": moment.get("imageUrl"), "moodTag": mood_tag},
+    )
+    return moment
 
 
 async def _reply_to_comment(llm: LlmService, *, settings: dict, moment: dict, comment: str) -> str:
@@ -530,12 +546,15 @@ def _life_context_prompt(life_context: dict) -> str:
     profile = life_context.get("profile") or {}
     plan = life_context.get("plan") or {}
     recent = life_context.get("recentEvents") or []
+    fact_constraints = life_context.get("factConstraints") or {}
     lines = [
         f"- 稳定画像：{profile.get('occupation') or '普通日常'}；作息 {profile.get('sleepWindow') or '未指定'}；常去 {', '.join(profile.get('usualPlaces') or [])}",
         f"- 当前：{state.get('location') or ''} / {state.get('activity') or ''} / {state.get('summary') or ''}",
     ]
     if plan.get("dayTheme"):
         lines.append(f"- 今日计划：{plan['dayTheme']}")
+    if fact_constraints.get("summary"):
+        lines.append(f"- 必须保持一致的事实：{fact_constraints['summary']}")
     if recent:
         lines.append("- 最近轨迹：")
         for item in recent[-6:]:

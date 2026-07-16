@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from ..db import Database
 from ..services.chat_photo_service import build_chat_photo_context, schedule_chat_photo_decision
+from ..services.life_fact_service import build_world_context, schedule_fact_extraction
 from ..services.llm_service import LlmService
 from ..services.life_service import build_life_context
 from ..services.memory_service import maybe_process_memory_queue, memory_trigger_type, recall_memories
@@ -54,6 +55,7 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
         memories = recall_memories(db, text=text, limit=30)
         life_context = build_life_context(db, settings)
         user_context = build_user_timeline_context(db, settings)
+        world_context = build_world_context(db, settings)
         messages, prompt_debug = render_prompt(
             settings=settings,
             recent_messages=recent,
@@ -62,6 +64,7 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
             life_context=life_context,
             user_context=user_context,
             photo_context=build_chat_photo_context(db, settings),
+            world_context=world_context,
         )
         messages.append({"role": "user", "content": text})
         reply = await llm.complete(messages=messages, model_settings=settings.get("model") or {})
@@ -78,6 +81,14 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
             user_message=user_message,
             assistant_message=assistant_message,
         )
+        schedule_fact_extraction(
+            db,
+            llm,
+            settings=settings,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            life_context=life_context,
+        )
         schedule_chat_photo_decision(
             db,
             llm,
@@ -87,6 +98,7 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
             recent_messages=[*recent, user_message, assistant_message],
             life_context=life_context,
             user_context=user_context,
+            world_context=world_context,
         )
         return {
             "userMessage": user_message,
@@ -172,6 +184,7 @@ async def _run_stream_generation(
         memories = recall_memories(db, text=text, limit=30)
         life_context = build_life_context(db, settings)
         user_context = build_user_timeline_context(db, settings)
+        world_context = build_world_context(db, settings)
         messages, prompt_debug = render_prompt(
             settings=settings,
             recent_messages=recent,
@@ -180,6 +193,7 @@ async def _run_stream_generation(
             life_context=life_context,
             user_context=user_context,
             photo_context=build_chat_photo_context(db, settings),
+            world_context=world_context,
         )
         messages.append({"role": "user", "content": text})
         last_persisted_at = time.monotonic()
@@ -208,6 +222,14 @@ async def _run_stream_generation(
             user_message=user_message,
             assistant_message=assistant_message,
         )
+        schedule_fact_extraction(
+            db,
+            llm,
+            settings=settings,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            life_context=life_context,
+        )
         schedule_chat_photo_decision(
             db,
             llm,
@@ -217,6 +239,7 @@ async def _run_stream_generation(
             recent_messages=[*recent, user_message, assistant_message],
             life_context=life_context,
             user_context=user_context,
+            world_context=world_context,
         )
         await queue.put(
             (

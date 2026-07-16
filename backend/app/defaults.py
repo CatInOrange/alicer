@@ -62,8 +62,20 @@ DEFAULT_SETTINGS: dict = {
             "title": "伴侣生活状态",
             "description": "后台模拟的当前生活、最近轨迹和连续事件。",
             "enabled": True,
-            "order": 45,
+            "order": 46,
             "content": "伴侣自己的生活状态：{{life.current}}",
+        },
+        {
+            "id": "world_context",
+            "title": "一致性事实账本",
+            "description": "聊天、朋友圈、生活模拟共同遵守的承诺、计划和稳定事实。",
+            "enabled": True,
+            "order": 44,
+            "content": (
+                "当前世界状态：\n{{world.current}}\n\n"
+                "未完成承诺与计划：\n{{world.commitments}}\n\n"
+                "{{world.guardrails}}"
+            ),
         },
         {
             "id": "user_timeline",
