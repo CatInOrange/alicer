@@ -186,16 +186,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               child: Column(
                 children: [
-                  for (final module in _settings.promptModules)
-                    _PromptModuleRow(
-                      module: module,
-                      onToggle:
-                          (value) => _updateModule(
-                            module.id,
-                            module.copyWith(enabled: value),
-                          ),
-                      onEdit: () => _editModule(module),
-                    ),
+                  ReorderableListView.builder(
+                    buildDefaultDragHandles: false,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: _orderedPromptModules.length,
+                    onReorder: _reorderPromptModules,
+                    itemBuilder: (context, index) {
+                      final module = _orderedPromptModules[index];
+                      return _PromptModuleRow(
+                        key: ValueKey(module.id),
+                        index: index,
+                        module: module,
+                        onToggle:
+                            (value) => _updateModule(
+                              module.id,
+                              module.copyWith(enabled: value),
+                            ),
+                        onEdit: () => _editModule(module),
+                      );
+                    },
+                  ),
                 ],
               ),
             ),
@@ -749,6 +760,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     unawaited(SettingsStore.save(_settings));
   }
 
+  List<PromptModule> get _orderedPromptModules {
+    return [..._settings.promptModules]..sort((a, b) {
+      final order = a.order.compareTo(b.order);
+      if (order != 0) return order;
+      return a.title.compareTo(b.title);
+    });
+  }
+
+  void _reorderPromptModules(int oldIndex, int newIndex) {
+    final modules = _orderedPromptModules;
+    if (newIndex > oldIndex) newIndex -= 1;
+    final moved = modules.removeAt(oldIndex);
+    modules.insert(newIndex, moved);
+    final reordered = [
+      for (var i = 0; i < modules.length; i++)
+        modules[i].copyWith(order: (i + 1) * 10),
+    ];
+    setState(() => _settings = _settings.copyWith(promptModules: reordered));
+    unawaited(SettingsStore.save(_settings));
+  }
+
   void _setEnvironment(EnvironmentToggles environment) {
     setState(() => _settings = _settings.copyWith(environment: environment));
     unawaited(SettingsStore.save(_settings));
@@ -790,71 +822,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _editModule(PromptModule module) async {
-    final controller = TextEditingController(text: module.content);
-    final result = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              16,
-              0,
-              16,
-              16 + MediaQuery.of(context).viewInsets.bottom,
-            ),
-            child: SizedBox(
-              height: MediaQuery.of(context).size.height * 0.72,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    module.title,
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    module.description,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: controller,
-                      expands: true,
-                      minLines: null,
-                      maxLines: null,
-                      textAlignVertical: TextAlignVertical.top,
-                      decoration: const InputDecoration(labelText: '模块内容'),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('取消'),
-                      ),
-                      const Spacer(),
-                      FilledButton.icon(
-                        onPressed:
-                            () => Navigator.of(
-                              context,
-                            ).pop(controller.text.trim()),
-                        icon: const Icon(Icons.check_rounded, size: 18),
-                        label: const Text('保存模块'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
+    final result = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (context) => _PromptModuleEditorScreen(module: module),
+      ),
     );
-    controller.dispose();
     if (result == null) return;
     _updateModule(module.id, module.copyWith(content: result));
   }
@@ -1920,11 +1892,14 @@ class _CollapsiblePanel extends StatelessWidget {
 
 class _PromptModuleRow extends StatelessWidget {
   const _PromptModuleRow({
+    super.key,
+    required this.index,
     required this.module,
     required this.onToggle,
     required this.onEdit,
   });
 
+  final int index;
   final PromptModule module;
   final ValueChanged<bool> onToggle;
   final VoidCallback onEdit;
@@ -1941,6 +1916,21 @@ class _PromptModuleRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 6),
           child: Row(
             children: [
+              ReorderableDragStartListener(
+                index: index,
+                child: Tooltip(
+                  message: '拖动排序',
+                  child: SizedBox(
+                    width: 34,
+                    height: 42,
+                    child: Icon(
+                      Icons.drag_indicator_rounded,
+                      color: colors.textMuted,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
               Container(
                 width: 38,
                 height: 38,
@@ -1967,14 +1957,126 @@ class _PromptModuleRow extends StatelessWidget {
                     const SizedBox(height: 3),
                     Text(
                       module.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
                 ),
               ),
+              const SizedBox(width: 8),
               Switch(value: module.enabled, onChanged: onToggle),
               const Icon(Icons.chevron_right_rounded),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PromptModuleEditorScreen extends StatefulWidget {
+  const _PromptModuleEditorScreen({required this.module});
+
+  final PromptModule module;
+
+  @override
+  State<_PromptModuleEditorScreen> createState() =>
+      _PromptModuleEditorScreenState();
+}
+
+class _PromptModuleEditorScreenState extends State<_PromptModuleEditorScreen> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.module.content);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.module.title),
+        actions: [
+          IconButton(
+            tooltip: '保存',
+            onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
+            icon: const Icon(Icons.check_rounded),
+          ),
+        ],
+      ),
+      body: DecoratedBox(
+        decoration: BoxDecoration(color: colors.background),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.primary.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(widget.module.icon, size: 22),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        widget.module.description,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    expands: true,
+                    minLines: null,
+                    maxLines: null,
+                    textAlignVertical: TextAlignVertical.top,
+                    decoration: const InputDecoration(labelText: '模块提示词'),
+                    style: const TextStyle(height: 1.45),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      label: const Text('取消'),
+                    ),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed:
+                          () => Navigator.of(
+                            context,
+                          ).pop(_controller.text.trim()),
+                      icon: const Icon(Icons.check_rounded, size: 18),
+                      label: const Text('保存'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),

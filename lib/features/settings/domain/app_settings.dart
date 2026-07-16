@@ -84,7 +84,7 @@ class PromptModule {
     'content': content,
   };
 
-  PromptModule copyWith({bool? enabled, String? content}) {
+  PromptModule copyWith({bool? enabled, String? content, int? order}) {
     return PromptModule(
       id: id,
       title: title,
@@ -92,7 +92,7 @@ class PromptModule {
       icon: icon,
       content: content ?? this.content,
       enabled: enabled ?? this.enabled,
-      order: order,
+      order: order ?? this.order,
     );
   }
 }
