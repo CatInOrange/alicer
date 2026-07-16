@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from ..db import Database
 from ..services.life_service import build_life_context
 from ..services.prompt_service import merge_settings, render_prompt
+from ..services.user_timeline_service import build_user_timeline_context
 
 
 def create_settings_router(db: Database) -> APIRouter:
@@ -30,6 +31,7 @@ def create_settings_router(db: Database) -> APIRouter:
             memories=memories,
             environment=payload.get("environment") or {},
             life_context=build_life_context(db, settings),
+            user_context=build_user_timeline_context(db, settings),
         )
         return {"messages": prompt_messages, "debug": debug}
 

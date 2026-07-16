@@ -140,6 +140,27 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_life_events_time
                 ON life_events(event_time DESC, id DESC);
 
+                CREATE TABLE IF NOT EXISTS user_timeline_state (
+                    id TEXT PRIMARY KEY,
+                    state_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS user_timeline_events (
+                    id TEXT PRIMARY KEY,
+                    event_time REAL NOT NULL,
+                    source TEXT NOT NULL DEFAULT '',
+                    event_type TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL DEFAULT '',
+                    confidence REAL NOT NULL DEFAULT 0.6,
+                    privacy_level TEXT NOT NULL DEFAULT 'context',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_timeline_events_time
+                ON user_timeline_events(event_time DESC, id DESC);
+
                 CREATE TABLE IF NOT EXISTS moments (
                     id TEXT PRIMARY KEY,
                     author TEXT NOT NULL,
@@ -858,6 +879,103 @@ class Database:
             ).fetchone()
         return self._life_event_row(row) if row is not None else None
 
+    def get_user_timeline_state(self) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT state_json, updated_at
+                FROM user_timeline_state
+                WHERE id = 'default'
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "state": json.loads(row["state_json"] or "{}"),
+            "updatedAt": row["updated_at"],
+        }
+
+    def save_user_timeline_state(self, state: dict) -> dict:
+        now = time.time()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_timeline_state(id, state_json, updated_at)
+                VALUES('default', ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    state_json=excluded.state_json,
+                    updated_at=excluded.updated_at
+                """,
+                (json.dumps(state, ensure_ascii=False), now),
+            )
+        return self.get_user_timeline_state() or {}
+
+    def add_user_timeline_event(
+        self,
+        *,
+        event_id: str,
+        event_time: float,
+        source: str,
+        event_type: str,
+        title: str,
+        summary: str,
+        confidence: float = 0.6,
+        privacy_level: str = "context",
+        metadata: dict | None = None,
+    ) -> dict:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO user_timeline_events(
+                    id, event_time, source, event_type, title, summary,
+                    confidence, privacy_level, metadata_json, created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    event_id,
+                    event_time,
+                    source[:80],
+                    event_type[:80],
+                    title[:160],
+                    summary[:800],
+                    max(0.0, min(1.0, float(confidence))),
+                    privacy_level[:40],
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    time.time(),
+                ),
+            )
+        return self.get_user_timeline_event(event_id) or {}
+
+    def get_user_timeline_event(self, event_id: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM user_timeline_events WHERE id = ?",
+                (event_id,),
+            ).fetchone()
+        return self._user_timeline_event_row(row) if row is not None else None
+
+    def list_user_timeline_events(self, *, limit: int = 50) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM user_timeline_events
+                ORDER BY event_time DESC, id DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 300)),),
+            ).fetchall()
+        return [self._user_timeline_event_row(row) for row in rows]
+
+    def prune_user_timeline_events(self, *, retention_days: int) -> int:
+        cutoff = time.time() - max(1, min(retention_days, 90)) * 86400
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM user_timeline_events WHERE event_time < ?",
+                (cutoff,),
+            )
+        return int(cursor.rowcount or 0)
+
     def _life_event_row(self, row: sqlite3.Row) -> dict:
         time_label = dt_from_timestamp(float(row["event_time"]))
         return {
@@ -874,6 +992,22 @@ class Database:
             "canPostMoment": bool(row["can_post_moment"]),
             "usedForMomentAt": row["used_for_moment_at"],
             "usedMomentId": row["used_moment_id"],
+            "metadata": json.loads(row["metadata_json"] or "{}"),
+            "createdAt": row["created_at"],
+        }
+
+    def _user_timeline_event_row(self, row: sqlite3.Row) -> dict:
+        time_label = dt_from_timestamp(float(row["event_time"]))
+        return {
+            "id": row["id"],
+            "eventTime": row["event_time"],
+            "timeLabel": time_label,
+            "source": row["source"],
+            "eventType": row["event_type"],
+            "title": row["title"],
+            "summary": row["summary"],
+            "confidence": row["confidence"],
+            "privacyLevel": row["privacy_level"],
             "metadata": json.loads(row["metadata_json"] or "{}"),
             "createdAt": row["created_at"],
         }

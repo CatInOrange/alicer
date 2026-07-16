@@ -20,6 +20,7 @@ from .routers.memories import create_memories_router
 from .routers.moments import create_moments_router, run_moments_scheduler
 from .routers.rifts import create_rifts_router
 from .routers.settings import create_settings_router
+from .routers.user_timeline import create_user_timeline_router
 from .services.llm_service import LlmService
 from .services.life_service import run_life_scheduler
 
@@ -57,6 +58,7 @@ def create_app() -> FastAPI:
     app.include_router(create_chat_router(db, llm))
     app.include_router(create_diary_router(db, llm))
     app.include_router(create_life_router(db, llm))
+    app.include_router(create_user_timeline_router(db))
     app.include_router(create_moments_router(db, llm))
     app.include_router(create_memories_router(db, llm))
     app.include_router(create_rifts_router(db, llm))

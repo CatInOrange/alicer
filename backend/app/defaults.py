@@ -66,12 +66,12 @@ DEFAULT_SETTINGS: dict = {
             "content": "伴侣自己的生活状态：{{life.current}}",
         },
         {
-            "id": "short_term_memory",
-            "title": "短期记忆",
-            "description": "最近聊天上下文和当前话题。",
+            "id": "user_timeline",
+            "title": "用户生活轨迹",
+            "description": "手机后台记录的用户当前状态、地点变化、音乐和设备上下文。",
             "enabled": True,
             "order": 50,
-            "content": "短期记忆：{{memory.short_term}}",
+            "content": "用户当前生活轨迹：{{user.current}}",
         },
         {
             "id": "long_term_memory",
@@ -89,7 +89,7 @@ DEFAULT_SETTINGS: dict = {
         "anniversary": True,
     },
     "memory": {
-        "shortTerm": True,
+        "shortTerm": False,
         "longTerm": True,
         "autoExtract": True,
         "reviewBeforeSave": True,
@@ -117,6 +117,17 @@ DEFAULT_SETTINGS: dict = {
         "randomness": 0.62,
         "autoMomentsFromLife": True,
         "profileRefreshHours": 24,
+    },
+    "userTimeline": {
+        "enabled": True,
+        "backgroundSync": True,
+        "location": True,
+        "music": True,
+        "motion": True,
+        "device": True,
+        "appUsage": False,
+        "retentionDays": 2,
+        "syncIntervalMinutes": 30,
     },
     "model": {
         "provider": "deepseek",

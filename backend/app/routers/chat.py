@@ -13,6 +13,7 @@ from ..services.llm_service import LlmService
 from ..services.life_service import build_life_context
 from ..services.memory_service import maybe_process_memory_queue, memory_trigger_type, recall_memories
 from ..services.prompt_service import merge_settings, render_prompt
+from ..services.user_timeline_service import build_user_timeline_context
 from ..services.weather_service import enrich_weather
 
 
@@ -49,6 +50,7 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
             memories=memories,
             environment=environment,
             life_context=build_life_context(db, settings),
+            user_context=build_user_timeline_context(db, settings),
         )
         reply = await llm.complete(messages=messages, model_settings=settings.get("model") or {})
         assistant_message = db.add_message(
@@ -117,6 +119,7 @@ async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
             memories=memories,
             environment=environment,
             life_context=build_life_context(db, settings),
+            user_context=build_user_timeline_context(db, settings),
         )
         last_persisted_at = time.monotonic()
         async for chunk in llm.stream_complete(messages=messages, model_settings=settings.get("model") or {}):

@@ -13,6 +13,7 @@ import '../../chat/data/chat_repository.dart';
 import '../../environment/application/environment_service.dart';
 import '../data/settings_store.dart';
 import '../domain/app_settings.dart';
+import '../../user_timeline/application/user_timeline_service.dart';
 import 'app_update_screen.dart';
 import 'memory_screen.dart';
 
@@ -26,6 +27,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _imagePicker = ImagePicker();
   final _environmentService = EnvironmentService();
+  final _userTimelineService = UserTimelineService();
   final _apiBaseController = TextEditingController();
   final _adminTokenController = TextEditingController();
   final _companionNameController = TextEditingController();
@@ -38,11 +40,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isRestartingBackend = false;
   bool _isLoadingLife = false;
   bool _isAdvancingLife = false;
+  bool _isLoadingUserTimeline = false;
+  bool _isSyncingUserTimeline = false;
   String _environmentStatus = '尚未读取';
   String _backendStatus = '未检测';
   String _lifeStatus = '尚未读取';
+  String _userTimelineStatus = '尚未读取';
   Map<String, dynamic>? _lifeContext;
   List<Map<String, dynamic>> _lifeEvents = const [];
+  Map<String, dynamic>? _userTimelineContext;
+  List<Map<String, dynamic>> _userTimelineEvents = const [];
 
   @override
   void initState() {
@@ -67,6 +74,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isLoading = false);
     unawaited(_checkBackend());
     unawaited(_loadLifeRecords());
+    unawaited(_loadUserTimeline());
+    unawaited(_userTimelineService.configureBackground(settings));
   }
 
   void _applySettings(AlicerSettings settings) {
@@ -253,19 +262,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _CollapsiblePanel(
               icon: Icons.memory_rounded,
               title: '记忆',
-              subtitle: '短期连续性优先本地缓存，长期记忆由后端沉淀。',
+              subtitle: '长期记忆由后端沉淀；短期上下文只作为聊天历史使用。',
               child: Column(
                 children: [
-                  _SwitchRow(
-                    icon: Icons.short_text_outlined,
-                    title: '短期记忆',
-                    subtitle: '最近聊天与当前话题。',
-                    value: _settings.memory.shortTerm,
-                    onChanged:
-                        (value) => _setMemory(
-                          _settings.memory.copyWith(shortTerm: value),
-                        ),
-                  ),
                   _SwitchRow(
                     icon: Icons.auto_stories_outlined,
                     title: '长期记忆',
@@ -344,6 +343,128 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             maxHistoryMessages: value,
                           ),
                         ),
+                  ),
+                ],
+              ),
+            ),
+            _CollapsiblePanel(
+              icon: Icons.phone_android_outlined,
+              title: '我的轨迹',
+              subtitle: 'Android 后台轻量记录地点、音乐、运动和设备状态，让她更懂你。',
+              child: Column(
+                children: [
+                  _SwitchRow(
+                    icon: Icons.route_outlined,
+                    title: '启用用户生活轨迹',
+                    subtitle: '开启后手机端会同步授权的状态事件到后端。',
+                    value: _settings.userTimeline.enabled,
+                    onChanged:
+                        (value) => _setUserTimeline(
+                          _settings.userTimeline.copyWith(enabled: value),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.sync_rounded,
+                    title: '后台低频同步',
+                    subtitle: 'Android 会用系统 Worker 低频唤醒，不需要一直打开 App。',
+                    value: _settings.userTimeline.backgroundSync,
+                    onChanged:
+                        (value) => _setUserTimeline(
+                          _settings.userTimeline.copyWith(
+                            backgroundSync: value,
+                          ),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.place_outlined,
+                    title: '位置变化',
+                    subtitle: '默认只用于语义状态，不在聊天里暴露精确坐标。',
+                    value: _settings.userTimeline.location,
+                    onChanged:
+                        (value) => _setUserTimeline(
+                          _settings.userTimeline.copyWith(location: value),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.music_note_outlined,
+                    title: '音乐状态',
+                    subtitle: '记录正在听歌、暂停和切换等线索；需要通知访问权限。',
+                    value: _settings.userTimeline.music,
+                    onChanged:
+                        (value) => _setUserTimeline(
+                          _settings.userTimeline.copyWith(music: value),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.directions_walk_outlined,
+                    title: '运动/通勤状态',
+                    subtitle: '预留 Activity Recognition 权限，用于步行、静止、通勤判断。',
+                    value: _settings.userTimeline.motion,
+                    onChanged:
+                        (value) => _setUserTimeline(
+                          _settings.userTimeline.copyWith(motion: value),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.battery_charging_full_outlined,
+                    title: '设备状态',
+                    subtitle: '电量、充电、耳机连接等低敏上下文。',
+                    value: _settings.userTimeline.device,
+                    onChanged:
+                        (value) => _setUserTimeline(
+                          _settings.userTimeline.copyWith(device: value),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.apps_rounded,
+                    title: 'App 使用行为',
+                    subtitle: '权限敏感，默认关闭；后续只做类别，不采集内容。',
+                    value: _settings.userTimeline.appUsage,
+                    onChanged:
+                        (value) => _setUserTimeline(
+                          _settings.userTimeline.copyWith(appUsage: value),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.timer_outlined,
+                    title: '后台同步间隔',
+                    subtitle:
+                        '${_settings.userTimeline.syncIntervalMinutes} 分钟 · Android 实际执行时间会受系统调度影响。',
+                    value: _settings.userTimeline.syncIntervalMinutes,
+                    min: 15,
+                    max: 180,
+                    divisions: 11,
+                    onChanged:
+                        (value) => _setUserTimeline(
+                          _settings.userTimeline.copyWith(
+                            syncIntervalMinutes: value,
+                          ),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.delete_sweep_outlined,
+                    title: '事件保留',
+                    subtitle:
+                        '仅保留最近 ${_settings.userTimeline.retentionDays} 天内的原始轨迹。',
+                    value: _settings.userTimeline.retentionDays,
+                    min: 1,
+                    max: 2,
+                    divisions: 1,
+                    onChanged:
+                        (value) => _setUserTimeline(
+                          _settings.userTimeline.copyWith(retentionDays: value),
+                        ),
+                  ),
+                  const Divider(height: 26),
+                  _UserTimelinePanel(
+                    contextData: _userTimelineContext,
+                    events: _userTimelineEvents,
+                    status: _userTimelineStatus,
+                    isLoading: _isLoadingUserTimeline,
+                    isSyncing: _isSyncingUserTimeline,
+                    onRefresh: _loadUserTimeline,
+                    onSyncNow: _syncUserTimelineNow,
+                    onRequestPermissions: _requestUserTimelinePermissions,
                   ),
                 ],
               ),
@@ -599,6 +720,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       await SettingsStore.save(next);
       await ChatRepository(settings: next).syncSettings();
+      await _userTimelineService.configureBackground(next);
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -645,6 +767,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _setLife(LifeSettings life) {
     setState(() => _settings = _settings.copyWith(life: life));
     unawaited(SettingsStore.save(_settings));
+  }
+
+  void _setUserTimeline(UserTimelineSettings userTimeline) {
+    setState(() => _settings = _settings.copyWith(userTimeline: userTimeline));
+    unawaited(SettingsStore.save(_settings));
+    unawaited(_userTimelineService.configureBackground(_settings));
   }
 
   void _setModel(String model) {
@@ -976,6 +1104,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _loadUserTimeline() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingUserTimeline = true;
+      _userTimelineStatus = '读取中...';
+    });
+    try {
+      final client = ApiClient(baseUrl: _currentApiBaseUrl());
+      final stateResponse = await client.getJson('/api/user/timeline/state');
+      final eventsResponse = await client.getJson('/api/user/timeline/events', {
+        'limit': '36',
+      });
+      final timeline = Map<String, dynamic>.from(
+        (stateResponse['userTimeline'] as Map?) ?? const {},
+      );
+      final events = ((eventsResponse['events'] as List?) ?? const <dynamic>[])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList(growable: false);
+      if (!mounted) return;
+      setState(() {
+        _userTimelineContext = timeline;
+        _userTimelineEvents = events;
+        _userTimelineStatus =
+            timeline['enabled'] == false
+                ? '用户轨迹未启用'
+                : '已读取 ${events.length} 条轨迹';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _userTimelineStatus = '读取失败：$error');
+    } finally {
+      if (mounted) setState(() => _isLoadingUserTimeline = false);
+    }
+  }
+
+  Future<void> _syncUserTimelineNow() async {
+    if (_isSyncingUserTimeline) return;
+    setState(() {
+      _isSyncingUserTimeline = true;
+      _userTimelineStatus = '正在同步手机轨迹...';
+    });
+    try {
+      final result = await _userTimelineService.syncNow(_settings);
+      await _userTimelineService.configureBackground(_settings);
+      await _loadUserTimeline();
+      if (!mounted) return;
+      setState(() => _userTimelineStatus = result.label);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _userTimelineStatus = '同步失败：$error');
+    } finally {
+      if (mounted) setState(() => _isSyncingUserTimeline = false);
+    }
+  }
+
+  Future<void> _requestUserTimelinePermissions() async {
+    try {
+      final message = await _userTimelineService.requestAndroidPermissions(
+        _settings.userTimeline,
+      );
+      await _userTimelineService.configureBackground(_settings);
+      if (!mounted) return;
+      setState(() => _userTimelineStatus = message);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _userTimelineStatus = '权限处理失败：$error');
+    }
+  }
+
   Future<void> _checkBackend() async {
     setState(() => _backendStatus = '检测中...');
     try {
@@ -1221,6 +1419,202 @@ class _LifeRecordsPanel extends StatelessWidget {
       ],
     );
   }
+}
+
+class _UserTimelinePanel extends StatelessWidget {
+  const _UserTimelinePanel({
+    required this.contextData,
+    required this.events,
+    required this.status,
+    required this.isLoading,
+    required this.isSyncing,
+    required this.onRefresh,
+    required this.onSyncNow,
+    required this.onRequestPermissions,
+  });
+
+  final Map<String, dynamic>? contextData;
+  final List<Map<String, dynamic>> events;
+  final String status;
+  final bool isLoading;
+  final bool isSyncing;
+  final VoidCallback onRefresh;
+  final VoidCallback onSyncNow;
+  final VoidCallback onRequestPermissions;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    final timeline = contextData ?? const <String, dynamic>{};
+    final state = Map<String, dynamic>.from(
+      (timeline['state'] as Map?) ?? const {},
+    );
+    final summary = _joinFilled([
+      _readString(state, 'activity'),
+      _readString(state, 'locationLabel'),
+      _readString(state, 'music'),
+      _readString(state, 'battery'),
+    ], separator: ' · ');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '我的轨迹记录',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            IconButton(
+              tooltip: '申请权限',
+              onPressed: onRequestPermissions,
+              icon: const Icon(Icons.verified_user_outlined),
+            ),
+            IconButton(
+              tooltip: '同步一次',
+              onPressed: isSyncing ? null : onSyncNow,
+              icon:
+                  isSyncing
+                      ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                      : const Icon(Icons.cloud_sync_outlined),
+            ),
+            IconButton(
+              tooltip: '刷新',
+              onPressed: isLoading ? null : onRefresh,
+              icon:
+                  isLoading
+                      ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                      : const Icon(Icons.refresh_rounded),
+            ),
+          ],
+        ),
+        Text(status, style: Theme.of(context).textTheme.bodySmall),
+        const SizedBox(height: 10),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: colors.surfaceSoft,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: colors.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('当前用户状态', style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 6),
+              Text(
+                summary.isEmpty ? '还没有手机轨迹状态。' : summary,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _LifeFactChip(
+                    label: '注意',
+                    value: _readString(state, 'attentionState', fallback: '未知'),
+                  ),
+                  _LifeFactChip(
+                    label: '运动',
+                    value: _readString(state, 'motion', fallback: '未记录'),
+                  ),
+                  _LifeFactChip(
+                    label: '耳机',
+                    value: _readString(state, 'headset', fallback: '未记录'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        if (events.isEmpty)
+          Text('暂无用户轨迹事件。', style: Theme.of(context).textTheme.bodySmall)
+        else
+          Column(
+            children: [
+              for (final event in events.take(36))
+                _UserTimelineEventRow(event: event),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+class _UserTimelineEventRow extends StatelessWidget {
+  const _UserTimelineEventRow({required this.event});
+
+  final Map<String, dynamic> event;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    final title = _joinFilled([
+      _readString(event, 'timeLabel'),
+      _readString(event, 'title'),
+    ], separator: ' · ');
+    final summary = _readString(event, 'summary', fallback: '无摘要');
+    final eventType = _readString(event, 'eventType');
+    final source = _readString(event, 'source', fallback: 'unknown');
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 3),
+            child: Icon(
+              _userTimelineIcon(eventType),
+              size: 18,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title.isEmpty ? '未标记事件' : title,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 2),
+                Text(summary, style: Theme.of(context).textTheme.bodySmall),
+                const SizedBox(height: 2),
+                Text(
+                  '$eventType · $source · 置信度 ${_formatEnergy(event['confidence'])}',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: colors.textMuted),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+IconData _userTimelineIcon(String eventType) {
+  if (eventType.startsWith('location')) return Icons.place_outlined;
+  if (eventType.startsWith('music')) return Icons.music_note_outlined;
+  if (eventType.startsWith('motion')) return Icons.directions_walk_outlined;
+  if (eventType.startsWith('device_battery')) {
+    return Icons.battery_charging_full_outlined;
+  }
+  if (eventType.startsWith('device_headset')) return Icons.headphones_outlined;
+  return Icons.phone_android_outlined;
 }
 
 class _LifeFactChip extends StatelessWidget {

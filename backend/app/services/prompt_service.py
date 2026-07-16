@@ -9,12 +9,25 @@ def merge_settings(stored: dict | None) -> dict:
     if not stored:
         return DEFAULT_SETTINGS
     merged = {**DEFAULT_SETTINGS, **stored}
-    for key in ("companion", "environment", "memory", "chatContext", "moments", "life", "model"):
+    for key in (
+        "companion",
+        "environment",
+        "memory",
+        "chatContext",
+        "moments",
+        "life",
+        "userTimeline",
+        "model",
+    ):
         merged[key] = {**DEFAULT_SETTINGS.get(key, {}), **stored.get(key, {})}
     if not stored.get("promptModules"):
         merged["promptModules"] = DEFAULT_SETTINGS["promptModules"]
     else:
-        stored_modules = [item for item in stored.get("promptModules") or [] if isinstance(item, dict)]
+        stored_modules = [
+            item
+            for item in stored.get("promptModules") or []
+            if isinstance(item, dict) and item.get("id") != "short_term_memory"
+        ]
         existing_ids = {str(item.get("id") or "") for item in stored_modules}
         missing = [
             item
@@ -32,6 +45,7 @@ def render_prompt(
     memories: list[dict],
     environment: dict | None,
     life_context: dict | None = None,
+    user_context: dict | None = None,
 ) -> tuple[list[dict], dict]:
     env = environment or {}
     modules = sorted(
@@ -44,6 +58,7 @@ def render_prompt(
         memories=memories,
         env=env,
         life_context=life_context or {},
+        user_context=user_context or {},
     )
     rendered_blocks = []
     for module in modules:
@@ -85,6 +100,7 @@ def _build_variables(
     memories: list[dict],
     env: dict,
     life_context: dict,
+    user_context: dict,
 ) -> dict[str, str]:
     companion = settings.get("companion") or {}
     environment = settings.get("environment") or {}
@@ -104,6 +120,7 @@ def _build_variables(
     if memory.get("longTerm", True):
         long_term = _format_memories(memories[:24])
     life_text = _format_life_context(life_context)
+    user_text = _format_user_context(user_context)
     return {
         "companion.name": str(companion.get("name") or "Alice"),
         "user.name": str(companion.get("userName") or "你"),
@@ -111,6 +128,7 @@ def _build_variables(
         "current.location": location_text,
         "current.weather": weather_text,
         "life.current": life_text,
+        "user.current": user_text,
         "memory.short_term": short_term,
         "memory.long_term": long_term,
         "recent_messages": short_term,
@@ -199,6 +217,37 @@ def _format_life_context(life_context: dict) -> str:
             lines.append(f"  - {time_text} {place}：{summary}".strip())
     lines.append("- 回答时把这些当作她自己的真实日常；不要随意改职业、住处、作息等稳定事实。")
     lines.append("- 如果用户问“你在干嘛/在哪/今天做什么”，优先引用当前状态和最近轨迹；普通聊天不要生硬汇报全部轨迹。")
+    return "\n".join(lines)
+
+
+def _format_user_context(user_context: dict) -> str:
+    if not user_context or user_context.get("enabled") is False:
+        return "未启用用户生活轨迹；不要假装知道用户当前手机状态。"
+    state = user_context.get("state") or {}
+    recent_events = user_context.get("recentEvents") or []
+    lines = []
+    state_parts = [
+        str(state.get("activity") or "").strip(),
+        f"地点线索：{state.get('locationLabel')}" if state.get("locationLabel") else "",
+        f"音乐：{state.get('music')}" if state.get("music") else "",
+        f"运动：{state.get('motion')}" if state.get("motion") else "",
+        f"电量：{state.get('battery')}" if state.get("battery") else "",
+        f"耳机：{state.get('headset')}" if state.get("headset") else "",
+        f"注意状态：{state.get('attentionState')}" if state.get("attentionState") else "",
+    ]
+    compact = "；".join(part for part in state_parts if part)
+    lines.append("- 用户当前状态：" + (compact or "暂无手机轨迹状态。"))
+    if state.get("summary"):
+        lines.append(f"- 用户近期摘要：{state['summary']}")
+    if recent_events:
+        lines.append("- 用户最近轨迹：")
+        for item in recent_events[-8:]:
+            time_text = str(item.get("timeLabel") or "").strip()
+            summary = str(item.get("summary") or item.get("title") or "").strip()
+            lines.append(f"  - {time_text}：{summary}".strip())
+    lines.append("- 这是用户授权的手机上下文，只能自然地用于关心和判断打扰程度。")
+    lines.append("- 不要暴露精确坐标、不要表现得像监控；除非用户询问，否则不要逐条汇报。")
+    lines.append("- 如果用户问“我在哪/我在干嘛/我刚才做什么/我在听什么”，优先依据这里回答，并说明不确定性。")
     return "\n".join(lines)
 
 

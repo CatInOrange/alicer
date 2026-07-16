@@ -143,7 +143,7 @@ class EnvironmentToggles {
 
 class MemoryToggles {
   const MemoryToggles({
-    this.shortTerm = true,
+    this.shortTerm = false,
     this.longTerm = true,
     this.autoExtract = true,
     this.reviewBeforeSave = true,
@@ -181,6 +181,85 @@ class MemoryToggles {
       longTerm: longTerm ?? this.longTerm,
       autoExtract: autoExtract ?? this.autoExtract,
       reviewBeforeSave: reviewBeforeSave ?? this.reviewBeforeSave,
+    );
+  }
+}
+
+class UserTimelineSettings {
+  const UserTimelineSettings({
+    this.enabled = true,
+    this.backgroundSync = true,
+    this.location = true,
+    this.music = true,
+    this.motion = true,
+    this.device = true,
+    this.appUsage = false,
+    this.retentionDays = 2,
+    this.syncIntervalMinutes = 30,
+  });
+
+  final bool enabled;
+  final bool backgroundSync;
+  final bool location;
+  final bool music;
+  final bool motion;
+  final bool device;
+  final bool appUsage;
+  final int retentionDays;
+  final int syncIntervalMinutes;
+
+  factory UserTimelineSettings.fromJson(Map<String, dynamic> json) {
+    return UserTimelineSettings(
+      enabled: json['enabled'] != false,
+      backgroundSync: json['backgroundSync'] != false,
+      location: json['location'] != false,
+      music: json['music'] != false,
+      motion: json['motion'] != false,
+      device: json['device'] != false,
+      appUsage: json['appUsage'] == true,
+      retentionDays: _clampInt(json['retentionDays'], 2, 1, 2),
+      syncIntervalMinutes: _clampInt(json['syncIntervalMinutes'], 30, 15, 180),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'backgroundSync': backgroundSync,
+    'location': location,
+    'music': music,
+    'motion': motion,
+    'device': device,
+    'appUsage': appUsage,
+    'retentionDays': retentionDays,
+    'syncIntervalMinutes': syncIntervalMinutes,
+  };
+
+  UserTimelineSettings copyWith({
+    bool? enabled,
+    bool? backgroundSync,
+    bool? location,
+    bool? music,
+    bool? motion,
+    bool? device,
+    bool? appUsage,
+    int? retentionDays,
+    int? syncIntervalMinutes,
+  }) {
+    return UserTimelineSettings(
+      enabled: enabled ?? this.enabled,
+      backgroundSync: backgroundSync ?? this.backgroundSync,
+      location: location ?? this.location,
+      music: music ?? this.music,
+      motion: motion ?? this.motion,
+      device: device ?? this.device,
+      appUsage: appUsage ?? this.appUsage,
+      retentionDays: _clampInt(retentionDays, this.retentionDays, 1, 2),
+      syncIntervalMinutes: _clampInt(
+        syncIntervalMinutes,
+        this.syncIntervalMinutes,
+        15,
+        180,
+      ),
     );
   }
 }
@@ -313,8 +392,10 @@ class LifeSettings {
     return LifeSettings(
       enabled: json['enabled'] != false,
       updateIntervalHours: _clampInt(json['updateIntervalHours'], 1, 1, 6),
-      randomness:
-          ((json['randomness'] as num?)?.toDouble() ?? 0.62).clamp(0.0, 1.0),
+      randomness: ((json['randomness'] as num?)?.toDouble() ?? 0.62).clamp(
+        0.0,
+        1.0,
+      ),
       autoMomentsFromLife: json['autoMomentsFromLife'] != false,
       profileRefreshHours: _clampInt(json['profileRefreshHours'], 24, 6, 168),
     );
@@ -465,6 +546,7 @@ class AlicerSettings {
     this.chatContext = const ChatContextSettings(),
     this.moments = const MomentsSettings(),
     this.life = const LifeSettings(),
+    this.userTimeline = const UserTimelineSettings(),
     this.model = const ModelSettings(),
   });
 
@@ -477,6 +559,7 @@ class AlicerSettings {
   final ChatContextSettings chatContext;
   final MomentsSettings moments;
   final LifeSettings life;
+  final UserTimelineSettings userTimeline;
   final ModelSettings model;
 
   factory AlicerSettings.fromJson(Map<String, dynamic> json) {
@@ -486,11 +569,14 @@ class AlicerSettings {
       companion: CompanionProfile.fromJson(
         Map<String, dynamic>.from((json['companion'] as Map?) ?? const {}),
       ),
-      promptModules: ((json['promptModules'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((item) => PromptModule.fromJson(Map<String, dynamic>.from(item)))
-          .toList(growable: false)
-          .ifEmpty(defaultPromptModules),
+      promptModules: _mergePromptModules(
+        ((json['promptModules'] as List?) ?? const [])
+            .whereType<Map>()
+            .map(
+              (item) => PromptModule.fromJson(Map<String, dynamic>.from(item)),
+            )
+            .toList(growable: false),
+      ),
       environment: EnvironmentToggles.fromJson(
         Map<String, dynamic>.from((json['environment'] as Map?) ?? const {}),
       ),
@@ -505,6 +591,9 @@ class AlicerSettings {
       ),
       life: LifeSettings.fromJson(
         Map<String, dynamic>.from((json['life'] as Map?) ?? const {}),
+      ),
+      userTimeline: UserTimelineSettings.fromJson(
+        Map<String, dynamic>.from((json['userTimeline'] as Map?) ?? const {}),
       ),
       model: ModelSettings.fromJson(
         Map<String, dynamic>.from((json['model'] as Map?) ?? const {}),
@@ -522,6 +611,7 @@ class AlicerSettings {
     'chatContext': chatContext.toJson(),
     'moments': moments.toJson(),
     'life': life.toJson(),
+    'userTimeline': userTimeline.toJson(),
     'model': model.toJson(),
   };
 
@@ -533,6 +623,7 @@ class AlicerSettings {
     'chatContext': chatContext.toJson(),
     'moments': moments.toJson(),
     'life': life.toJson(),
+    'userTimeline': userTimeline.toJson(),
     'model': model.toJson(),
   };
 
@@ -546,6 +637,7 @@ class AlicerSettings {
     ChatContextSettings? chatContext,
     MomentsSettings? moments,
     LifeSettings? life,
+    UserTimelineSettings? userTimeline,
     ModelSettings? model,
   }) {
     return AlicerSettings(
@@ -558,13 +650,22 @@ class AlicerSettings {
       chatContext: chatContext ?? this.chatContext,
       moments: moments ?? this.moments,
       life: life ?? this.life,
+      userTimeline: userTimeline ?? this.userTimeline,
       model: model ?? this.model,
     );
   }
 }
 
-extension _ListDefault<T> on List<T> {
-  List<T> ifEmpty(List<T> fallback) => isEmpty ? fallback : this;
+List<PromptModule> _mergePromptModules(List<PromptModule> stored) {
+  final filtered =
+      stored.where((item) => item.id != 'short_term_memory').toList();
+  if (filtered.isEmpty) return defaultPromptModules;
+  final ids = filtered.map((item) => item.id).toSet();
+  return [
+    ...filtered,
+    for (final module in defaultPromptModules)
+      if (!ids.contains(module.id)) module,
+  ];
 }
 
 IconData promptModuleIcon(String id) {
@@ -576,6 +677,7 @@ IconData promptModuleIcon(String id) {
     'emoji_style' => Icons.emoji_emotions_outlined,
     'environment' => Icons.wb_sunny_outlined,
     'life_state' => Icons.timeline_outlined,
+    'user_timeline' => Icons.phone_android_outlined,
     'short_term_memory' => Icons.short_text_outlined,
     'long_term_memory' => Icons.auto_stories_outlined,
     _ => Icons.notes_outlined,
@@ -648,11 +750,11 @@ const defaultPromptModules = <PromptModule>[
     order: 45,
   ),
   PromptModule(
-    id: 'short_term_memory',
-    title: '短期记忆',
-    description: '最近话题、今日情绪和正在进行的事。',
-    icon: Icons.short_text_outlined,
-    content: '短期记忆：{{memory.short_term}}',
+    id: 'user_timeline',
+    title: '用户生活轨迹',
+    description: '手机后台记录的地点、音乐、设备和活动上下文。',
+    icon: Icons.phone_android_outlined,
+    content: '用户当前生活轨迹：{{user.current}}',
     enabled: true,
     order: 50,
   ),
