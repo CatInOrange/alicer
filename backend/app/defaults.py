@@ -74,6 +74,22 @@ DEFAULT_SETTINGS: dict = {
             "content": "用户当前现实状态：{{user.current}}",
         },
         {
+            "id": "history_older",
+            "title": "更早聊天历史",
+            "description": "最新 20 条之前的历史，按上下文预算裁剪。",
+            "enabled": True,
+            "order": 55,
+            "content": "更早的聊天历史：{{history.older}}",
+        },
+        {
+            "id": "history_recent_20",
+            "title": "最新 20 条聊天",
+            "description": "最接近当前回复的原始聊天上下文。",
+            "enabled": True,
+            "order": 58,
+            "content": "最新 20 条聊天：{{history.recent_20}}",
+        },
+        {
             "id": "long_term_memory",
             "title": "长期记忆",
             "description": "稳定事实、偏好、关系事件和重要回忆。",

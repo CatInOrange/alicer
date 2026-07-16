@@ -5,6 +5,12 @@ import datetime as dt
 from ..defaults import DEFAULT_SETTINGS
 
 
+RECENT_HISTORY_COUNT = 20
+RECENT_HISTORY_CHAR_BUDGET = 24_000
+OLDER_HISTORY_CHAR_BUDGET = 36_000
+SYSTEM_PROMPT_CHAR_BUDGET = 120_000
+
+
 def merge_settings(stored: dict | None) -> dict:
     if not stored:
         return DEFAULT_SETTINGS
@@ -73,23 +79,20 @@ def render_prompt(
                 "content": content.strip(),
             }
         )
+    rendered_blocks = _fit_rendered_blocks(rendered_blocks, SYSTEM_PROMPT_CHAR_BUDGET)
     system_prompt = "\n\n".join(block["content"] for block in rendered_blocks if block["content"])
     prompt_history = _select_prompt_history(settings=settings, recent_messages=recent_messages)
-    history = [
-        {
-            "role": "assistant" if item["role"] == "assistant" else "user",
-            "content": item["content"],
-        }
-        for item in prompt_history
-        if item.get("role") in {"user", "assistant"} and item.get("content")
-    ]
-    return [{"role": "system", "content": system_prompt}, *history], {
+    return [{"role": "system", "content": system_prompt}], {
         "blocks": rendered_blocks,
         "variables": variables,
-        "messagesCount": len(history) + 1,
-        "historyCount": len(history),
+        "messagesCount": 1,
+        "historyCount": len(prompt_history),
+        "historyRecentCount": min(RECENT_HISTORY_COUNT, len(prompt_history)),
+        "historyOlderCount": max(0, len(prompt_history) - RECENT_HISTORY_COUNT),
         "historyMode": (settings.get("chatContext") or {}).get("historyMode") or "all",
         "memoryIds": [item.get("id") for item in memories if item.get("id")],
+        "systemPromptChars": len(system_prompt),
+        "systemPromptCharBudget": SYSTEM_PROMPT_CHAR_BUDGET,
     }
 
 
@@ -108,9 +111,10 @@ def _build_variables(
     now_text = _format_time(env)
     location_text = _format_location(env) if environment.get("location") else ""
     weather_text = _format_weather(env) if environment.get("weather") else ""
+    prompt_history = _select_prompt_history(settings=settings, recent_messages=recent_messages)
+    history_older, history_recent = _format_split_history(prompt_history)
     short_term = ""
     if memory.get("shortTerm", True):
-        prompt_history = _select_prompt_history(settings=settings, recent_messages=recent_messages)
         short_term = "\n".join(
             f"{item.get('role')}: {item.get('content')}"
             for item in prompt_history[-12:]
@@ -129,6 +133,8 @@ def _build_variables(
         "current.weather": weather_text,
         "life.current": life_text,
         "user.current": user_text,
+        "history.older": history_older,
+        "history.recent_20": history_recent,
         "memory.short_term": short_term,
         "memory.long_term": long_term,
         "recent_messages": short_term,
@@ -178,6 +184,68 @@ def _format_memories(memories: list[dict]) -> str:
     for label, lines in grouped.items():
         sections.append(label + "：\n" + "\n".join(lines[:8]))
     return "\n".join(sections)
+
+
+def _format_split_history(messages: list[dict]) -> tuple[str, str]:
+    older = messages[:-RECENT_HISTORY_COUNT]
+    recent = messages[-RECENT_HISTORY_COUNT:]
+    return (
+        _format_history_block(older, char_budget=OLDER_HISTORY_CHAR_BUDGET, empty_text="暂无更早聊天历史。"),
+        _format_history_block(recent, char_budget=RECENT_HISTORY_CHAR_BUDGET, empty_text="暂无最近聊天历史。"),
+    )
+
+
+def _format_history_block(messages: list[dict], *, char_budget: int, empty_text: str) -> str:
+    lines = []
+    for item in messages:
+        role = "Alice" if item.get("role") == "assistant" else "用户"
+        time_text = _format_message_time(item)
+        content = " ".join(str(item.get("content") or "").split())
+        if content:
+            lines.append(f"- {time_text} {role}: {content}".strip())
+    if not lines:
+        return empty_text
+    selected = []
+    used = 0
+    for line in reversed(lines):
+        cost = len(line) + 1
+        if selected and used + cost > char_budget:
+            break
+        if cost > char_budget:
+            line = line[: max(0, char_budget - 1)].rstrip() + "…"
+            cost = len(line)
+        selected.append(line)
+        used += cost
+    selected.reverse()
+    omitted = len(lines) - len(selected)
+    if omitted > 0:
+        selected.insert(0, f"- 已省略更早的 {omitted} 条聊天。")
+    return "\n".join(selected)
+
+
+def _format_message_time(item: dict) -> str:
+    created = _created_at(item)
+    if created.year <= 1970:
+        return ""
+    return created.strftime("%m-%d %H:%M")
+
+
+def _fit_rendered_blocks(blocks: list[dict], char_budget: int) -> list[dict]:
+    fitted = []
+    used = 0
+    for block in blocks:
+        content = str(block.get("content") or "")
+        remaining = char_budget - used
+        if remaining <= 0:
+            next_block = {**block, "content": ""}
+        elif len(content) > remaining:
+            next_block = {**block, "content": content[: max(0, remaining - 1)].rstrip() + "…"}
+            used = char_budget
+        else:
+            next_block = block
+            used += len(content) + 2
+        fitted.append(next_block)
+    return fitted
 
 
 def _format_life_context(life_context: dict) -> str:

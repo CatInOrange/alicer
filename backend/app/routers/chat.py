@@ -45,7 +45,11 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
         )
         settings = merge_settings(request.settings or db.get_settings())
         environment = await enrich_weather(request.environment)
-        recent = db.list_messages(limit=300)
+        recent = [
+            message
+            for message in db.list_messages(limit=300)
+            if message.get("id") != user_message.get("id")
+        ]
         memories = recall_memories(db, text=text, limit=30)
         messages, prompt_debug = render_prompt(
             settings=settings,
@@ -55,6 +59,7 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
             life_context=build_life_context(db, settings),
             user_context=build_user_timeline_context(db, settings),
         )
+        messages.append({"role": "user", "content": text})
         reply = await llm.complete(messages=messages, model_settings=settings.get("model") or {})
         assistant_message = db.add_message(
             message_id=f"msg_{uuid.uuid4().hex}",
@@ -148,7 +153,7 @@ async def _run_stream_generation(
         recent = [
             message
             for message in db.list_messages(limit=300)
-            if message.get("id") != assistant_id
+            if message.get("id") not in {assistant_id, user_message.get("id")}
         ]
         memories = recall_memories(db, text=text, limit=30)
         messages, prompt_debug = render_prompt(
@@ -159,6 +164,7 @@ async def _run_stream_generation(
             life_context=build_life_context(db, settings),
             user_context=build_user_timeline_context(db, settings),
         )
+        messages.append({"role": "user", "content": text})
         last_persisted_at = time.monotonic()
         async for chunk in llm.stream_complete(messages=messages, model_settings=settings.get("model") or {}):
             full_reply += chunk

@@ -9,6 +9,7 @@ from ..config import Settings
 
 
 GROK_REFERENCE_IMAGE_URL = "https://yzcos-1317705976.cos.ap-singapore.myqcloud.com/reference/my_avatar.jpg"
+REQUEST_CHAR_BUDGET = 250_000
 
 
 class LlmService:
@@ -159,6 +160,7 @@ class LlmService:
         return f"/uploads/{bucket}/{name}"
 
     def _payload(self, *, messages: list[dict], model_settings: dict, stream: bool) -> dict:
+        messages = _fit_messages(messages, char_budget=REQUEST_CHAR_BUDGET)
         return {
             "model": model_settings.get("model") or self.settings.deepseek_model,
             "messages": messages,
@@ -191,6 +193,47 @@ class LlmService:
 def _chunk_text(text: str, size: int = 8):
     for index in range(0, len(text), size):
         yield text[index : index + size]
+
+
+def _fit_messages(messages: list[dict], *, char_budget: int) -> list[dict]:
+    fitted = [{**item} for item in messages]
+    total = sum(len(str(item.get("content") or "")) for item in fitted)
+    if total <= char_budget:
+        return fitted
+    overflow = total - char_budget
+    for item in fitted:
+        if item.get("role") != "system":
+            continue
+        content = str(item.get("content") or "")
+        if not content:
+            continue
+        remove = min(overflow, max(0, len(content) - 1))
+        if remove <= 0:
+            continue
+        keep = max(0, len(content) - remove - 1)
+        item["content"] = content[:keep].rstrip() + "…"
+        overflow -= remove
+        if overflow <= 0:
+            return fitted
+    for item in fitted[:-1]:
+        content = str(item.get("content") or "")
+        if not content:
+            continue
+        remove = min(overflow, max(0, len(content) - 1))
+        if remove <= 0:
+            continue
+        keep = max(0, len(content) - remove - 1)
+        item["content"] = content[:keep].rstrip() + "…"
+        overflow -= remove
+        if overflow <= 0:
+            break
+    if overflow > 0 and fitted:
+        last = fitted[-1]
+        content = str(last.get("content") or "")
+        if content:
+            keep = max(0, len(content) - overflow - 1)
+            last["content"] = content[:keep].rstrip() + "…"
+    return fitted
 
 
 def _image_extension(image_bytes: bytes) -> str:
