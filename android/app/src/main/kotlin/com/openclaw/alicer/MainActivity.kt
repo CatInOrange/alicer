@@ -81,9 +81,6 @@ class MainActivity : FlutterActivity() {
         if (args?.get("music") != false && !UserTimelineNotificationListener.isEnabled(this)) {
             pending += "通知访问（音乐状态）"
         }
-        if (args?.get("appUsage") == true) {
-            pending += "使用情况访问（App 类别）"
-        }
         return mapOf(
             "granted" to requested.distinct().filter {
                 ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED

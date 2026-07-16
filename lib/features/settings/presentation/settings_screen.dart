@@ -185,7 +185,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _CollapsiblePanel(
               icon: Icons.auto_awesome_outlined,
               title: '提示词模块',
-              subtitle: '酒馆式模块化 Prompt，角色描述和性格特质都在这里编辑。',
+              subtitle: '只保留可编辑的人设风格和统一运行上下文，避免重复注入。',
               initiallyExpanded: true,
               trailing: FilledButton.icon(
                 onPressed: _showPromptPreview,
@@ -254,16 +254,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           _settings.environment.copyWith(weather: value),
                         ),
                   ),
-                  _SwitchRow(
-                    icon: Icons.favorite_border_rounded,
-                    title: '纪念日',
-                    subtitle: '预留给关系里程碑和特殊日期。',
-                    value: _settings.environment.anniversary,
-                    onChanged:
-                        (value) => _setEnvironment(
-                          _settings.environment.copyWith(anniversary: value),
-                        ),
-                  ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -280,8 +270,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.memory_rounded,
-              title: '记忆',
-              subtitle: '长期记忆由后端沉淀；短期上下文只作为聊天历史使用。',
+              title: '记忆与聊天上下文',
+              subtitle: '长期记忆由后端沉淀；聊天历史统一进入运行上下文。',
               child: Column(
                 children: [
                   _SwitchRow(
@@ -337,7 +327,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     icon: Icons.format_list_numbered_outlined,
                     title: '最近条数',
                     subtitle:
-                        '按最近条数模式时取 ${_settings.chatContext.recentMessages} 条消息。',
+                        '选择“最近”模式时，运行上下文最多取 ${_settings.chatContext.recentMessages} 条消息。',
                     value: _settings.chatContext.recentMessages,
                     min: 10,
                     max: 300,
@@ -351,7 +341,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     icon: Icons.history_edu_outlined,
                     title: '上下文上限',
                     subtitle:
-                        '没超过窗口时尽量保留历史，最多 ${_settings.chatContext.maxHistoryMessages} 条。',
+                        '统一运行上下文最多读取 ${_settings.chatContext.maxHistoryMessages} 条历史，再压缩成最近 20 条和更早摘要。',
                     value: _settings.chatContext.maxHistoryMessages,
                     min: 20,
                     max: 300,
@@ -432,16 +422,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged:
                         (value) => _setUserTimeline(
                           _settings.userTimeline.copyWith(device: value),
-                        ),
-                  ),
-                  _SwitchRow(
-                    icon: Icons.apps_rounded,
-                    title: 'App 使用行为',
-                    subtitle: '权限敏感，默认关闭；后续只做类别，不采集内容。',
-                    value: _settings.userTimeline.appUsage,
-                    onChanged:
-                        (value) => _setUserTimeline(
-                          _settings.userTimeline.copyWith(appUsage: value),
                         ),
                   ),
                   _IntSliderRow(

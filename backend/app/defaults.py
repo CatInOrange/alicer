@@ -70,7 +70,6 @@ DEFAULT_SETTINGS: dict = {
         "time": True,
         "location": True,
         "weather": True,
-        "anniversary": True,
     },
     "memory": {
         "shortTerm": False,
@@ -109,7 +108,6 @@ DEFAULT_SETTINGS: dict = {
         "music": True,
         "motion": True,
         "device": True,
-        "appUsage": False,
         "retentionDays": 2,
         "syncIntervalMinutes": 30,
     },

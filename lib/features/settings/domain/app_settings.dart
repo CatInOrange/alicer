@@ -102,20 +102,17 @@ class EnvironmentToggles {
     this.time = true,
     this.location = true,
     this.weather = true,
-    this.anniversary = true,
   });
 
   final bool time;
   final bool location;
   final bool weather;
-  final bool anniversary;
 
   factory EnvironmentToggles.fromJson(Map<String, dynamic> json) {
     return EnvironmentToggles(
       time: json['time'] != false,
       location: json['location'] != false,
       weather: json['weather'] != false,
-      anniversary: json['anniversary'] != false,
     );
   }
 
@@ -123,20 +120,13 @@ class EnvironmentToggles {
     'time': time,
     'location': location,
     'weather': weather,
-    'anniversary': anniversary,
   };
 
-  EnvironmentToggles copyWith({
-    bool? time,
-    bool? location,
-    bool? weather,
-    bool? anniversary,
-  }) {
+  EnvironmentToggles copyWith({bool? time, bool? location, bool? weather}) {
     return EnvironmentToggles(
       time: time ?? this.time,
       location: location ?? this.location,
       weather: weather ?? this.weather,
-      anniversary: anniversary ?? this.anniversary,
     );
   }
 }
@@ -156,7 +146,7 @@ class MemoryToggles {
 
   factory MemoryToggles.fromJson(Map<String, dynamic> json) {
     return MemoryToggles(
-      shortTerm: json['shortTerm'] != false,
+      shortTerm: json['shortTerm'] == true,
       longTerm: json['longTerm'] != false,
       autoExtract: json['autoExtract'] != false,
       reviewBeforeSave: json['reviewBeforeSave'] != false,
@@ -193,7 +183,6 @@ class UserTimelineSettings {
     this.music = true,
     this.motion = true,
     this.device = true,
-    this.appUsage = false,
     this.retentionDays = 2,
     this.syncIntervalMinutes = 30,
   });
@@ -204,7 +193,6 @@ class UserTimelineSettings {
   final bool music;
   final bool motion;
   final bool device;
-  final bool appUsage;
   final int retentionDays;
   final int syncIntervalMinutes;
 
@@ -216,7 +204,6 @@ class UserTimelineSettings {
       music: json['music'] != false,
       motion: json['motion'] != false,
       device: json['device'] != false,
-      appUsage: json['appUsage'] == true,
       retentionDays: _clampInt(json['retentionDays'], 2, 1, 2),
       syncIntervalMinutes: _clampInt(json['syncIntervalMinutes'], 30, 15, 180),
     );
@@ -229,7 +216,6 @@ class UserTimelineSettings {
     'music': music,
     'motion': motion,
     'device': device,
-    'appUsage': appUsage,
     'retentionDays': retentionDays,
     'syncIntervalMinutes': syncIntervalMinutes,
   };
@@ -241,7 +227,6 @@ class UserTimelineSettings {
     bool? music,
     bool? motion,
     bool? device,
-    bool? appUsage,
     int? retentionDays,
     int? syncIntervalMinutes,
   }) {
@@ -252,7 +237,6 @@ class UserTimelineSettings {
       music: music ?? this.music,
       motion: motion ?? this.motion,
       device: device ?? this.device,
-      appUsage: appUsage ?? this.appUsage,
       retentionDays: _clampInt(retentionDays, this.retentionDays, 1, 2),
       syncIntervalMinutes: _clampInt(
         syncIntervalMinutes,
@@ -763,14 +747,6 @@ IconData promptModuleIcon(String id) {
     'emoji_style' => Icons.emoji_emotions_outlined,
     'environment' => Icons.wb_sunny_outlined,
     'runtime_context' => Icons.account_tree_outlined,
-    'world_context' => Icons.account_tree_outlined,
-    'life_state' => Icons.timeline_outlined,
-    'user_timeline' => Icons.phone_android_outlined,
-    'chat_photo' => Icons.add_a_photo_outlined,
-    'history_older' => Icons.manage_history_outlined,
-    'history_recent_20' => Icons.forum_outlined,
-    'short_term_memory' => Icons.short_text_outlined,
-    'long_term_memory' => Icons.auto_stories_outlined,
     _ => Icons.notes_outlined,
   };
 }
