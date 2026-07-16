@@ -23,6 +23,9 @@ class ChatRequest(BaseModel):
     settings: dict | None = None
 
 
+_BACKGROUND_STREAM_TASKS: set[asyncio.Task] = set()
+
+
 def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -100,11 +103,46 @@ async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
         metadata={"streamStatus": "streaming"},
     )
     assistant_id = str(assistant_message["id"])
-    full_reply = ""
-    prompt_debug: dict = {}
-    completed = False
+    queue: asyncio.Queue[tuple[str, dict] | None] = asyncio.Queue()
+    task = asyncio.create_task(
+        _run_stream_generation(
+            request,
+            db=db,
+            llm=llm,
+            queue=queue,
+            user_message=user_message,
+            assistant_id=assistant_id,
+        )
+    )
+    _BACKGROUND_STREAM_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_STREAM_TASKS.discard)
     yield _sse("start", {"userMessage": user_message, "assistantMessage": assistant_message})
     try:
+        while True:
+            item = await queue.get()
+            if item is None:
+                return
+            event, payload = item
+            yield _sse(event, payload)
+    except asyncio.CancelledError:
+        # The UI may leave the page while a reply is still being generated.
+        # Keep the background task alive so /api/messages can recover it later.
+        raise
+
+
+async def _run_stream_generation(
+    request: ChatRequest,
+    *,
+    db: Database,
+    llm: LlmService,
+    queue: asyncio.Queue[tuple[str, dict] | None],
+    user_message: dict,
+    assistant_id: str,
+) -> None:
+    full_reply = ""
+    prompt_debug: dict = {}
+    try:
+        text = request.text.strip()
         settings = merge_settings(request.settings or db.get_settings())
         environment = await enrich_weather(request.environment)
         recent = [
@@ -132,13 +170,14 @@ async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
                     metadata={"streamStatus": "streaming", "promptDebug": prompt_debug},
                 )
                 last_persisted_at = now
-            yield _sse("chunk", {"delta": chunk})
+            await queue.put(("chunk", {"delta": chunk}))
         assistant_message = db.update_message(
             message_id=assistant_id,
             content=full_reply.strip(),
             metadata={"streamStatus": "complete", "promptDebug": prompt_debug},
-        ) or assistant_message
-        completed = True
+        ) or db.get_message(assistant_id)
+        if assistant_message is None:
+            return
         _queue_memory_extraction(
             db,
             llm,
@@ -146,21 +185,22 @@ async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
             user_message=user_message,
             assistant_message=assistant_message,
         )
-        yield _sse(
-            "final",
-            {
-                "userMessage": user_message,
-                "assistantMessage": assistant_message,
-                "promptDebug": prompt_debug,
-            },
+        await queue.put(
+            (
+                "final",
+                {
+                    "userMessage": user_message,
+                    "assistantMessage": assistant_message,
+                    "promptDebug": prompt_debug,
+                },
+            )
         )
     except asyncio.CancelledError:
         db.update_message(
             message_id=assistant_id,
             content=full_reply,
-            metadata={"streamStatus": "interrupted", "promptDebug": prompt_debug},
+            metadata={"streamStatus": "cancelled", "promptDebug": prompt_debug},
         )
-        completed = True
         raise
     except Exception as exc:  # noqa: BLE001
         db.update_message(
@@ -172,15 +212,9 @@ async def _stream_chat(request: ChatRequest, *, db: Database, llm: LlmService):
                 "promptDebug": prompt_debug,
             },
         )
-        completed = True
-        yield _sse("error", {"error": str(exc)})
+        await queue.put(("error", {"error": str(exc)}))
     finally:
-        if not completed and full_reply:
-            db.update_message(
-                message_id=assistant_id,
-                content=full_reply,
-                metadata={"streamStatus": "interrupted", "promptDebug": prompt_debug},
-            )
+        await queue.put(None)
 
 
 def _sse(event: str, payload: dict) -> str:

@@ -19,7 +19,7 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
   final _cacheStore = ChatCacheStore.instance;
@@ -29,20 +29,30 @@ class _ChatScreenState extends State<ChatScreen> {
   List<ChatMessage> _messages = const <ChatMessage>[];
   bool _isLoading = true;
   bool _isSending = false;
+  bool _refreshingFromServer = false;
   String _statusText = '正在整理今天的心情';
   String? _error;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_load());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshFromServer(_settings, force: true));
+    }
   }
 
   Future<void> _load() async {
@@ -54,25 +64,50 @@ class _ChatScreenState extends State<ChatScreen> {
       _messages = cached.isEmpty ? _starterMessages(settings) : cached;
       _isLoading = false;
     });
-    if (cached.isEmpty || !(await _cacheStore.isFresh())) {
-      unawaited(_refreshFromServer(settings));
-    }
+    unawaited(_refreshFromServer(settings, force: true));
   }
 
-  Future<void> _refreshFromServer(AlicerSettings settings) async {
+  Future<void> _refreshFromServer(
+    AlicerSettings settings, {
+    bool force = false,
+  }) async {
+    if (!force && await _cacheStore.isFresh()) return;
+    if (_refreshingFromServer) return;
+    _refreshingFromServer = true;
     try {
       final remote = await ChatRepository(settings: settings).fetchMessages();
       if (!mounted || remote.isEmpty) return;
+      final hasStreaming = remote.any(_isActiveStreamingMessage);
       setState(() {
         _messages = remote;
+        _isSending = hasStreaming;
+        _statusText = _isSending ? '正在回复' : '刚刚同步';
         _error = null;
       });
       await _cacheStore.saveMessages(remote);
       if (_isNearBottom()) _scrollToBottom(animated: false);
+      if (hasStreaming) {
+        _scheduleServerRefresh();
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = '后端暂时连不上，正在使用本地缓存');
+    } finally {
+      _refreshingFromServer = false;
     }
+  }
+
+  void _scheduleServerRefresh() {
+    Future<void>.delayed(const Duration(seconds: 2), () async {
+      if (!mounted) return;
+      await _refreshFromServer(_settings, force: true);
+    });
+  }
+
+  bool _isActiveStreamingMessage(ChatMessage message) {
+    if (message.metadata['streamStatus'] != 'streaming') return false;
+    return DateTime.now().difference(message.createdAt) <
+        const Duration(minutes: 10);
   }
 
   Future<void> _send() async {
@@ -253,7 +288,8 @@ class _ChatScreenState extends State<ChatScreen> {
         actions: [
           IconButton(
             tooltip: '同步消息',
-            onPressed: () => unawaited(_refreshFromServer(_settings)),
+            onPressed:
+                () => unawaited(_refreshFromServer(_settings, force: true)),
             icon: const Icon(Icons.sync_rounded),
           ),
         ],
