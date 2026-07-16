@@ -3,14 +3,11 @@ package com.openclaw.alicer
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
-import android.os.BatteryManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 
@@ -20,7 +17,6 @@ object UserTimelineCollector {
         val now = System.currentTimeMillis() / 1000.0
         val events = mutableListOf<Map<String, Any?>>()
         if (signals["device"] != false) {
-            batteryEvent(context, now)?.let(events::add)
             headsetEvent(context, now)?.let(events::add)
         }
         if (signals["music"] != false) {
@@ -30,26 +26,6 @@ object UserTimelineCollector {
             locationEvents(context, now, signals["motion"] != false).let(events::addAll)
         }
         return events
-    }
-
-    private fun batteryEvent(context: Context, now: Double): Map<String, Any?>? {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return null
-        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-        val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
-        val percent = if (level >= 0 && scale > 0) (level * 100 / scale) else -1
-        val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
-            status == BatteryManager.BATTERY_STATUS_FULL
-        return mapOf(
-            "eventTime" to now,
-            "source" to "android",
-            "eventType" to "device_battery",
-            "title" to "电量状态",
-            "summary" to "手机电量 $percent%${if (charging) "，正在充电" else ""}",
-            "confidence" to 0.88,
-            "privacyLevel" to "context",
-            "metadata" to mapOf("level" to percent, "charging" to charging),
-        )
     }
 
     private fun headsetEvent(context: Context, now: Double): Map<String, Any?>? {

@@ -406,9 +406,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                   ),
                   _SwitchRow(
-                    icon: Icons.battery_charging_full_outlined,
+                    icon: Icons.headphones_outlined,
                     title: '设备状态',
-                    subtitle: '电量、充电、耳机连接等低敏上下文。',
+                    subtitle: '耳机连接等低敏上下文，不采集电量。',
                     value: _settings.userTimeline.device,
                     onChanged:
                         (value) => _setUserTimeline(
@@ -1453,7 +1453,6 @@ class _UserTimelinePanel extends StatelessWidget {
       _readString(state, 'activity'),
       _readString(state, 'locationLabel'),
       _readString(state, 'music'),
-      _readString(state, 'battery'),
     ], separator: ' · ');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1610,9 +1609,6 @@ IconData _userTimelineIcon(String eventType) {
   if (eventType.startsWith('location')) return Icons.place_outlined;
   if (eventType.startsWith('music')) return Icons.music_note_outlined;
   if (eventType.startsWith('motion')) return Icons.directions_walk_outlined;
-  if (eventType.startsWith('device_battery')) {
-    return Icons.battery_charging_full_outlined;
-  }
   if (eventType.startsWith('device_headset')) return Icons.headphones_outlined;
   return Icons.phone_android_outlined;
 }

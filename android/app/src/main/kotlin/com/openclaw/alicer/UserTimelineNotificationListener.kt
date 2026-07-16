@@ -42,7 +42,7 @@ class UserTimelineNotificationListener : NotificationListenerService() {
                 "eventTime" to now,
                 "source" to "android",
                 "eventType" to "music_playing",
-                "title" to "正在听音乐",
+                "title" to latestTitle,
                 "summary" to listOf("正在听歌", latestTitle, latestArtist)
                     .filter { it.isNotBlank() }
                     .joinToString(" · "),

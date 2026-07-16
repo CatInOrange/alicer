@@ -57,6 +57,8 @@ def _normalize_event(raw: dict) -> dict | None:
     source = str(raw.get("source") or "android").strip()
     if not event_type:
         return None
+    if event_type == "device_battery":
+        return None
     metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
     event_time = _float_or_now(raw.get("eventTime"))
     title = str(raw.get("title") or _title_for(event_type, metadata)).strip()
@@ -87,15 +89,13 @@ def _summarize_state(db: Database) -> dict:
     location = _latest_location(events)
     music = _latest_music(events)
     motion = _latest_motion(events)
-    battery = _latest_device(events, "battery")
     headset = _latest_device(events, "headset")
-    activity = _infer_activity(location=location, music=music, motion=motion, battery=battery)
+    activity = _infer_activity(location=location, music=music, motion=motion)
     summary = _join_filled(
         [
             location.get("summary") if location else "",
             motion.get("summary") if motion else "",
             music.get("summary") if music else "",
-            battery.get("summary") if battery else "",
         ],
         "；",
     )
@@ -104,7 +104,6 @@ def _summarize_state(db: Database) -> dict:
         "locationLabel": _metadata_value(location, "label") if location else "",
         "music": music.get("summary") if music else "",
         "motion": motion.get("summary") if motion else "",
-        "battery": battery.get("summary") if battery else "",
         "headset": headset.get("summary") if headset else "",
         "summary": summary,
         "attentionState": _attention_state(events),
@@ -135,7 +134,7 @@ def _latest_device(events: list[dict], kind: str) -> dict | None:
     )
 
 
-def _infer_activity(*, location: dict | None, music: dict | None, motion: dict | None, battery: dict | None) -> str:
+def _infer_activity(*, location: dict | None, music: dict | None, motion: dict | None) -> str:
     motion_type = _metadata_value(motion, "activity")
     if motion_type in {"in_vehicle", "on_bicycle"}:
         return "可能在通勤或移动中"
@@ -143,8 +142,6 @@ def _infer_activity(*, location: dict | None, music: dict | None, motion: dict |
         return "可能在步行"
     if music:
         return "正在听音乐" if not location else f"在{_metadata_value(location, 'label') or '当前位置'}听音乐"
-    if battery and _metadata_value(battery, "charging") == "true":
-        return "手机正在充电，可能在固定地点休息"
     return "普通日常状态"
 
 
@@ -167,7 +164,6 @@ def _title_for(event_type: str, metadata: dict) -> str:
         "music_playing": "正在听音乐",
         "music_paused": "音乐暂停",
         "motion_detected": "运动状态变化",
-        "device_battery": "电量状态",
         "device_headset": "耳机状态",
         "app_foreground": "打开 Alicer",
     }.get(event_type, event_type)
@@ -181,10 +177,6 @@ def _summary_for(event_type: str, metadata: dict) -> str:
         title = str(metadata.get("title") or "").strip()
         artist = str(metadata.get("artist") or "").strip()
         return _join_filled(["正在听歌", title, artist], " · ")
-    if event_type == "device_battery":
-        level = metadata.get("level")
-        charging = metadata.get("charging") is True
-        return f"手机电量 {level}%{'，正在充电' if charging else ''}"
     if event_type == "device_headset":
         connected = metadata.get("connected") is True
         return "耳机已连接" if connected else "耳机未连接"

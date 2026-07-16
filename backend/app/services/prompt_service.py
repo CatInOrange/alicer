@@ -231,7 +231,6 @@ def _format_user_context(user_context: dict) -> str:
         f"地点线索：{state.get('locationLabel')}" if state.get("locationLabel") else "",
         f"音乐：{state.get('music')}" if state.get("music") else "",
         f"运动：{state.get('motion')}" if state.get("motion") else "",
-        f"电量：{state.get('battery')}" if state.get("battery") else "",
         f"耳机：{state.get('headset')}" if state.get("headset") else "",
         f"注意状态：{state.get('attentionState')}" if state.get("attentionState") else "",
     ]
