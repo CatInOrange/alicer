@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+import datetime as dt
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+from zoneinfo import ZoneInfo
 
 
 class Database:
@@ -109,6 +111,35 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_diary_entries_period
                 ON diary_entries(kind, period_key DESC);
 
+                CREATE TABLE IF NOT EXISTS life_state (
+                    id TEXT PRIMARY KEY,
+                    profile_json TEXT NOT NULL DEFAULT '{}',
+                    state_json TEXT NOT NULL DEFAULT '{}',
+                    plan_json TEXT NOT NULL DEFAULT '{}',
+                    profile_updated_at REAL,
+                    plan_date TEXT NOT NULL DEFAULT '',
+                    updated_at REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS life_events (
+                    id TEXT PRIMARY KEY,
+                    event_time REAL NOT NULL,
+                    activity TEXT NOT NULL DEFAULT '',
+                    location TEXT NOT NULL DEFAULT '',
+                    mood TEXT NOT NULL DEFAULT '',
+                    energy REAL NOT NULL DEFAULT 0.6,
+                    summary TEXT NOT NULL DEFAULT '',
+                    details TEXT NOT NULL DEFAULT '',
+                    continuity TEXT NOT NULL DEFAULT '',
+                    can_post_moment INTEGER NOT NULL DEFAULT 0,
+                    used_for_moment_at REAL,
+                    used_moment_id TEXT NOT NULL DEFAULT '',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_life_events_time
+                ON life_events(event_time DESC, id DESC);
+
                 CREATE TABLE IF NOT EXISTS moments (
                     id TEXT PRIMARY KEY,
                     author TEXT NOT NULL,
@@ -202,6 +233,23 @@ class Database:
                     "source_json": "TEXT NOT NULL DEFAULT '{}'",
                     "expires_at": "REAL",
                     "last_used_at": "REAL",
+                },
+            )
+            self._ensure_columns(
+                conn,
+                "life_state",
+                {
+                    "plan_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "profile_updated_at": "REAL",
+                    "plan_date": "TEXT NOT NULL DEFAULT ''",
+                },
+            )
+            self._ensure_columns(
+                conn,
+                "life_events",
+                {
+                    "used_for_moment_at": "REAL",
+                    "used_moment_id": "TEXT NOT NULL DEFAULT ''",
                 },
             )
             conn.execute(
@@ -665,6 +713,171 @@ class Database:
             "generatedAt": row["generated_at"],
         }
 
+    def get_life_state(self) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, profile_json, state_json, plan_json,
+                       profile_updated_at, plan_date, updated_at
+                FROM life_state
+                WHERE id = 'default'
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "profile": json.loads(row["profile_json"] or "{}"),
+            "state": json.loads(row["state_json"] or "{}"),
+            "plan": json.loads(row["plan_json"] or "{}"),
+            "profileUpdatedAt": row["profile_updated_at"],
+            "planDate": row["plan_date"],
+            "updatedAt": row["updated_at"],
+        }
+
+    def save_life_state(
+        self,
+        *,
+        profile: dict,
+        state: dict,
+        plan: dict | None = None,
+        profile_updated_at: float | None = None,
+        plan_date: str = "",
+    ) -> dict:
+        now = time.time()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO life_state(
+                    id, profile_json, state_json, plan_json,
+                    profile_updated_at, plan_date, updated_at
+                )
+                VALUES('default', ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    profile_json=excluded.profile_json,
+                    state_json=excluded.state_json,
+                    plan_json=excluded.plan_json,
+                    profile_updated_at=excluded.profile_updated_at,
+                    plan_date=excluded.plan_date,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    json.dumps(profile, ensure_ascii=False),
+                    json.dumps(state, ensure_ascii=False),
+                    json.dumps(plan or {}, ensure_ascii=False),
+                    profile_updated_at,
+                    plan_date,
+                    now,
+                ),
+            )
+        return self.get_life_state() or {}
+
+    def add_life_event(
+        self,
+        *,
+        event_id: str,
+        event_time: float,
+        activity: str,
+        location: str,
+        mood: str,
+        energy: float,
+        summary: str,
+        details: str = "",
+        continuity: str = "",
+        can_post_moment: bool = False,
+        metadata: dict | None = None,
+    ) -> dict:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO life_events(
+                    id, event_time, activity, location, mood, energy, summary,
+                    details, continuity, can_post_moment, metadata_json, created_at,
+                    used_for_moment_at, used_moment_id
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    event_id,
+                    event_time,
+                    activity[:120],
+                    location[:120],
+                    mood[:80],
+                    max(0.0, min(1.0, float(energy))),
+                    summary[:500],
+                    details[:1200],
+                    continuity[:500],
+                    1 if can_post_moment else 0,
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    time.time(),
+                    None,
+                    "",
+                ),
+            )
+        return self.get_life_event(event_id) or {}
+
+    def mark_life_event_used_for_moment(self, event_id: str, moment_id: str) -> dict | None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE life_events
+                SET used_for_moment_at = ?, used_moment_id = ?
+                WHERE id = ?
+                """,
+                (time.time(), moment_id, event_id),
+            )
+        return self.get_life_event(event_id)
+
+    def get_life_event(self, event_id: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM life_events WHERE id = ?", (event_id,)).fetchone()
+        return self._life_event_row(row) if row is not None else None
+
+    def list_life_events(self, *, limit: int = 24) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM life_events
+                ORDER BY event_time DESC, id DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 200)),),
+            ).fetchall()
+        return [self._life_event_row(row) for row in rows]
+
+    def latest_life_event_before(self, event_time: float) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM life_events
+                WHERE event_time <= ?
+                ORDER BY event_time DESC, id DESC
+                LIMIT 1
+                """,
+                (event_time,),
+            ).fetchone()
+        return self._life_event_row(row) if row is not None else None
+
+    def _life_event_row(self, row: sqlite3.Row) -> dict:
+        time_label = dt_from_timestamp(float(row["event_time"]))
+        return {
+            "id": row["id"],
+            "eventTime": row["event_time"],
+            "timeLabel": time_label,
+            "activity": row["activity"],
+            "location": row["location"],
+            "mood": row["mood"],
+            "energy": row["energy"],
+            "summary": row["summary"],
+            "details": row["details"],
+            "continuity": row["continuity"],
+            "canPostMoment": bool(row["can_post_moment"]),
+            "usedForMomentAt": row["used_for_moment_at"],
+            "usedMomentId": row["used_moment_id"],
+            "metadata": json.loads(row["metadata_json"] or "{}"),
+            "createdAt": row["created_at"],
+        }
+
     def list_moments(self, *, limit: int = 50) -> list[dict]:
         with self.connect() as conn:
             rows = conn.execute(
@@ -983,3 +1196,8 @@ class Database:
 
 def uuid_like() -> str:
     return f"{int(time.time() * 1000):x}"
+
+
+def dt_from_timestamp(value: float) -> str:
+    local = dt.datetime.fromtimestamp(value, tz=ZoneInfo("Asia/Shanghai"))
+    return local.strftime("%m-%d %H:%M")

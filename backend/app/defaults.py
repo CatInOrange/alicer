@@ -58,6 +58,14 @@ DEFAULT_SETTINGS: dict = {
             "content": "当前环境：{{current.time}}{{current.location}}{{current.weather}}",
         },
         {
+            "id": "life_state",
+            "title": "伴侣生活状态",
+            "description": "后台模拟的当前生活、最近轨迹和连续事件。",
+            "enabled": True,
+            "order": 45,
+            "content": "伴侣自己的生活状态：{{life.current}}",
+        },
+        {
             "id": "short_term_memory",
             "title": "短期记忆",
             "description": "最近聊天上下文和当前话题。",
@@ -102,6 +110,13 @@ DEFAULT_SETTINGS: dict = {
             "Do not create a different woman, do not change ethnicity, do not change hairstyle, do not add other people. "
             "Natural candid smartphone photo for a WeChat Moments post, soft realistic lighting, no text, no watermark."
         ),
+    },
+    "life": {
+        "enabled": True,
+        "updateIntervalHours": 1,
+        "randomness": 0.62,
+        "autoMomentsFromLife": True,
+        "profileRefreshHours": 24,
     },
     "model": {
         "provider": "deepseek",

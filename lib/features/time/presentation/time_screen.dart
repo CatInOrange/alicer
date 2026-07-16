@@ -222,6 +222,14 @@ class _MomentsFeedState extends State<MomentsFeed> {
     try {
       await _repo.generateMoment();
       await _refreshFromServer();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        if (_moments.isEmpty) _error = '$error';
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('朋友圈生成失败：$error')));
     } finally {
       if (mounted) setState(() => _generating = false);
     }
@@ -391,8 +399,8 @@ class _MomentCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.alicerColors;
     final userLiked = post.likes.contains(settings.companion.userName);
-    final lifeThread = Map<String, dynamic>.from(
-      (post.metadata['lifeThread'] as Map?) ?? const <String, dynamic>{},
+    final lifeEvent = Map<String, dynamic>.from(
+      (post.metadata['lifeEvent'] as Map?) ?? const <String, dynamic>{},
     );
     final visibility = Map<String, dynamic>.from(
       (post.metadata['visibility'] as Map?) ?? const <String, dynamic>{},
@@ -425,7 +433,7 @@ class _MomentCard extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text(post.content, style: const TextStyle(height: 1.45)),
                 _MomentMetaChips(
-                  lifeThread: lifeThread,
+                  lifeEvent: lifeEvent,
                   visibility: visibility,
                   moodTag: moodTag,
                 ),
@@ -501,12 +509,12 @@ class _MomentCard extends StatelessWidget {
 
 class _MomentMetaChips extends StatelessWidget {
   const _MomentMetaChips({
-    required this.lifeThread,
+    required this.lifeEvent,
     required this.visibility,
     required this.moodTag,
   });
 
-  final Map<String, dynamic> lifeThread;
+  final Map<String, dynamic> lifeEvent;
   final Map<String, dynamic> visibility;
   final String moodTag;
 
@@ -523,15 +531,13 @@ class _MomentMetaChips extends StatelessWidget {
         ),
       );
     }
-    final threadTitle = (lifeThread['title'] ?? '').toString();
-    final threadBeat = (lifeThread['beat'] ?? '').toString();
-    if (threadTitle.isNotEmpty) {
+    final eventLabel = [
+      (lifeEvent['timeLabel'] ?? '').toString().trim(),
+      (lifeEvent['activity'] ?? '').toString().trim(),
+    ].where((item) => item.isNotEmpty).join(' · ');
+    if (eventLabel.isNotEmpty) {
       chips.add(
-        _MomentChipData(
-          icon: Icons.auto_stories_outlined,
-          label:
-              threadBeat.isEmpty ? threadTitle : '$threadTitle · $threadBeat',
-        ),
+        _MomentChipData(icon: Icons.timeline_outlined, label: eventLabel),
       );
     }
     if (moodTag.isNotEmpty) {

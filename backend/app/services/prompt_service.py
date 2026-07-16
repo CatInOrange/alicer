@@ -9,10 +9,19 @@ def merge_settings(stored: dict | None) -> dict:
     if not stored:
         return DEFAULT_SETTINGS
     merged = {**DEFAULT_SETTINGS, **stored}
-    for key in ("companion", "environment", "memory", "chatContext", "moments", "model"):
+    for key in ("companion", "environment", "memory", "chatContext", "moments", "life", "model"):
         merged[key] = {**DEFAULT_SETTINGS.get(key, {}), **stored.get(key, {})}
     if not stored.get("promptModules"):
         merged["promptModules"] = DEFAULT_SETTINGS["promptModules"]
+    else:
+        stored_modules = [item for item in stored.get("promptModules") or [] if isinstance(item, dict)]
+        existing_ids = {str(item.get("id") or "") for item in stored_modules}
+        missing = [
+            item
+            for item in DEFAULT_SETTINGS["promptModules"]
+            if str(item.get("id") or "") not in existing_ids
+        ]
+        merged["promptModules"] = [*stored_modules, *missing]
     return merged
 
 
@@ -22,13 +31,20 @@ def render_prompt(
     recent_messages: list[dict],
     memories: list[dict],
     environment: dict | None,
+    life_context: dict | None = None,
 ) -> tuple[list[dict], dict]:
     env = environment or {}
     modules = sorted(
         [item for item in settings.get("promptModules", []) if item.get("enabled")],
         key=lambda item: int(item.get("order") or 0),
     )
-    variables = _build_variables(settings=settings, recent_messages=recent_messages, memories=memories, env=env)
+    variables = _build_variables(
+        settings=settings,
+        recent_messages=recent_messages,
+        memories=memories,
+        env=env,
+        life_context=life_context or {},
+    )
     rendered_blocks = []
     for module in modules:
         content = str(module.get("content") or "")
@@ -62,7 +78,14 @@ def render_prompt(
     }
 
 
-def _build_variables(*, settings: dict, recent_messages: list[dict], memories: list[dict], env: dict) -> dict[str, str]:
+def _build_variables(
+    *,
+    settings: dict,
+    recent_messages: list[dict],
+    memories: list[dict],
+    env: dict,
+    life_context: dict,
+) -> dict[str, str]:
     companion = settings.get("companion") or {}
     environment = settings.get("environment") or {}
     memory = settings.get("memory") or {}
@@ -80,12 +103,14 @@ def _build_variables(*, settings: dict, recent_messages: list[dict], memories: l
     long_term = ""
     if memory.get("longTerm", True):
         long_term = _format_memories(memories[:24])
+    life_text = _format_life_context(life_context)
     return {
         "companion.name": str(companion.get("name") or "Alice"),
         "user.name": str(companion.get("userName") or "你"),
         "current.time": now_text if environment.get("time", True) else "",
         "current.location": location_text,
         "current.weather": weather_text,
+        "life.current": life_text,
         "memory.short_term": short_term,
         "memory.long_term": long_term,
         "recent_messages": short_term,
@@ -135,6 +160,46 @@ def _format_memories(memories: list[dict]) -> str:
     for label, lines in grouped.items():
         sections.append(label + "：\n" + "\n".join(lines[:8]))
     return "\n".join(sections)
+
+
+def _format_life_context(life_context: dict) -> str:
+    if not life_context or life_context.get("enabled") is False:
+        return "未启用生活模拟；不要凭空声称自己正在做具体事情。"
+    state = life_context.get("state") or {}
+    recent_events = life_context.get("recentEvents") or []
+    profile = life_context.get("profile") or {}
+    plan = life_context.get("plan") or {}
+    lines = []
+    occupation = str(profile.get("occupation") or state.get("occupation") or "").strip()
+    if occupation:
+        lines.append(f"- 稳定生活画像：{occupation}")
+    if plan.get("dayTheme"):
+        lines.append(f"- 今日计划主题：{plan['dayTheme']}")
+    state_parts = [
+        part
+        for part in [
+            str(state.get("activity") or "").strip(),
+            str(state.get("location") or "").strip(),
+            f"心情{state.get('mood')}" if state.get("mood") else "",
+            f"精力{state.get('energy')}" if state.get("energy") else "",
+        ]
+        if part
+    ]
+    lines.append(
+        "- 当前状态：" + ("，".join(state_parts) if state_parts else "普通日常")
+    )
+    if state.get("summary"):
+        lines.append(f"- 当前片段：{state['summary']}")
+    if recent_events:
+        lines.append("- 最近生活轨迹：")
+        for item in recent_events[-6:]:
+            time_text = str(item.get("timeLabel") or "").strip()
+            summary = str(item.get("summary") or item.get("activity") or "").strip()
+            place = str(item.get("location") or "").strip()
+            lines.append(f"  - {time_text} {place}：{summary}".strip())
+    lines.append("- 回答时把这些当作她自己的真实日常；不要随意改职业、住处、作息等稳定事实。")
+    lines.append("- 如果用户问“你在干嘛/在哪/今天做什么”，优先引用当前状态和最近轨迹；普通聊天不要生硬汇报全部轨迹。")
+    return "\n".join(lines)
 
 
 def _clamp_int(value: object, *, default: int, minimum: int, maximum: int) -> int:

@@ -36,8 +36,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoading = true;
   bool _isSaving = false;
   bool _isRestartingBackend = false;
+  bool _isLoadingLife = false;
+  bool _isAdvancingLife = false;
   String _environmentStatus = '尚未读取';
   String _backendStatus = '未检测';
+  String _lifeStatus = '尚未读取';
+  Map<String, dynamic>? _lifeContext;
+  List<Map<String, dynamic>> _lifeEvents = const [];
 
   @override
   void initState() {
@@ -61,6 +66,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _applySettings(settings);
     setState(() => _isLoading = false);
     unawaited(_checkBackend());
+    unawaited(_loadLifeRecords());
   }
 
   void _applySettings(AlicerSettings settings) {
@@ -343,6 +349,83 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             _CollapsiblePanel(
+              icon: Icons.timeline_outlined,
+              title: '生活模拟',
+              subtitle: '后台按小时推进她自己的生活轨迹，聊天和朋友圈共享同一状态。',
+              child: Column(
+                children: [
+                  _SwitchRow(
+                    icon: Icons.play_circle_outline_rounded,
+                    title: '启用生活模拟',
+                    subtitle: '开启后后端会定时生成当前活动、地点、心情和事件。',
+                    value: _settings.life.enabled,
+                    onChanged:
+                        (value) =>
+                            _setLife(_settings.life.copyWith(enabled: value)),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.update_rounded,
+                    title: '更新间隔',
+                    subtitle:
+                        '每 ${_settings.life.updateIntervalHours} 小时推进一次生活状态。',
+                    value: _settings.life.updateIntervalHours,
+                    min: 1,
+                    max: 6,
+                    divisions: 5,
+                    onChanged:
+                        (value) => _setLife(
+                          _settings.life.copyWith(updateIntervalHours: value),
+                        ),
+                  ),
+                  _SliderRow(
+                    icon: Icons.casino_outlined,
+                    title: '生活随机性',
+                    subtitle:
+                        '${(_settings.life.randomness * 100).round()}% · 越高越容易出现临时事件，但仍受记忆和生活画像约束。',
+                    value: _settings.life.randomness,
+                    onChanged:
+                        (value) => _setLife(
+                          _settings.life.copyWith(randomness: value),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.photo_camera_back_outlined,
+                    title: '朋友圈使用生活事件',
+                    subtitle: '生成朋友圈时优先围绕最近生活轨迹，而不是凭空写日常。',
+                    value: _settings.life.autoMomentsFromLife,
+                    onChanged:
+                        (value) => _setLife(
+                          _settings.life.copyWith(autoMomentsFromLife: value),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.manage_history_outlined,
+                    title: '画像刷新周期',
+                    subtitle:
+                        '${_settings.life.profileRefreshHours} 小时 · 从长期记忆重新归纳职业、作息和常去地点。',
+                    value: _settings.life.profileRefreshHours,
+                    min: 6,
+                    max: 168,
+                    divisions: 27,
+                    onChanged:
+                        (value) => _setLife(
+                          _settings.life.copyWith(profileRefreshHours: value),
+                        ),
+                  ),
+                  const Divider(height: 26),
+                  _LifeRecordsPanel(
+                    contextData: _lifeContext,
+                    events: _lifeEvents,
+                    status: _lifeStatus,
+                    isLoading: _isLoadingLife,
+                    isAdvancing: _isAdvancingLife,
+                    onRefresh: _loadLifeRecords,
+                    onAdvance: _advanceLifeOnce,
+                  ),
+                ],
+              ),
+            ),
+            _CollapsiblePanel(
               icon: Icons.photo_camera_back_outlined,
               title: '朋友圈',
               subtitle: '伴侣自动发朋友圈的频率和真实感。',
@@ -556,6 +639,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _setChatContext(ChatContextSettings chatContext) {
     setState(() => _settings = _settings.copyWith(chatContext: chatContext));
+    unawaited(SettingsStore.save(_settings));
+  }
+
+  void _setLife(LifeSettings life) {
+    setState(() => _settings = _settings.copyWith(life: life));
     unawaited(SettingsStore.save(_settings));
   }
 
@@ -825,14 +913,75 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _environmentStatus = snapshot.label);
   }
 
-  Future<void> _checkBackend() async {
-    final base =
+  String _currentApiBaseUrl() {
+    final raw =
         _apiBaseController.text.trim().isEmpty
             ? _settings.apiBaseUrl
             : _apiBaseController.text.trim();
+    return raw.replaceAll(RegExp(r'/$'), '');
+  }
+
+  Future<void> _loadLifeRecords() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingLife = true;
+      _lifeStatus = '读取中...';
+    });
+    try {
+      final client = ApiClient(baseUrl: _currentApiBaseUrl());
+      final stateResponse = await client.getJson('/api/life/state');
+      final eventsResponse = await client.getJson('/api/life/events', {
+        'limit': '24',
+      });
+      final life = Map<String, dynamic>.from(
+        (stateResponse['life'] as Map?) ?? const {},
+      );
+      final events = ((eventsResponse['events'] as List?) ?? const <dynamic>[])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList(growable: false);
+      if (!mounted) return;
+      setState(() {
+        _lifeContext = life;
+        _lifeEvents = events;
+        _lifeStatus =
+            life['enabled'] == false ? '生活模拟未启用' : '已读取 ${events.length} 条轨迹';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _lifeStatus = '读取失败：$error');
+    } finally {
+      if (mounted) setState(() => _isLoadingLife = false);
+    }
+  }
+
+  Future<void> _advanceLifeOnce() async {
+    if (_isAdvancingLife) return;
+    setState(() {
+      _isAdvancingLife = true;
+      _lifeStatus = '正在推进生活轨迹...';
+    });
+    try {
+      final client = ApiClient(baseUrl: _currentApiBaseUrl());
+      await client.postJson('/api/life/advance', {
+        'force': true,
+        'settings': _settings.toBackendJson(),
+      }, timeout: const Duration(seconds: 75));
+      await _loadLifeRecords();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _lifeStatus = '推进失败：$error');
+    } finally {
+      if (mounted) setState(() => _isAdvancingLife = false);
+    }
+  }
+
+  Future<void> _checkBackend() async {
     setState(() => _backendStatus = '检测中...');
     try {
-      final response = await ApiClient(baseUrl: base).getJson('/api/health');
+      final response = await ApiClient(
+        baseUrl: _currentApiBaseUrl(),
+      ).getJson('/api/health');
       if (!mounted) return;
       final configured =
           response['deepseekConfigured'] == true
@@ -901,6 +1050,294 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) setState(() => _isRestartingBackend = false);
     }
   }
+}
+
+class _LifeRecordsPanel extends StatelessWidget {
+  const _LifeRecordsPanel({
+    required this.contextData,
+    required this.events,
+    required this.status,
+    required this.isLoading,
+    required this.isAdvancing,
+    required this.onRefresh,
+    required this.onAdvance,
+  });
+
+  final Map<String, dynamic>? contextData;
+  final List<Map<String, dynamic>> events;
+  final String status;
+  final bool isLoading;
+  final bool isAdvancing;
+  final VoidCallback onRefresh;
+  final VoidCallback onAdvance;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    final life = contextData ?? const <String, dynamic>{};
+    final state = Map<String, dynamic>.from(
+      (life['state'] as Map?) ?? const {},
+    );
+    final profile = Map<String, dynamic>.from(
+      (life['profile'] as Map?) ?? const {},
+    );
+    final plan = Map<String, dynamic>.from((life['plan'] as Map?) ?? const {});
+    final isEnabled = life['enabled'] != false;
+    final summary = _joinFilled([
+      _readString(state, 'location'),
+      _readString(state, 'activity'),
+      _readString(state, 'summary'),
+    ], separator: ' · ');
+    final occupation = _readString(profile, 'occupation', fallback: '未归纳');
+    final workStyle = _readString(profile, 'workStyle', fallback: '未归纳');
+    final homeBase = _readString(profile, 'homeBase', fallback: '未归纳');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '生活轨迹记录',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            IconButton(
+              tooltip: '刷新',
+              onPressed: isLoading ? null : onRefresh,
+              icon:
+                  isLoading
+                      ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                      : const Icon(Icons.refresh_rounded),
+            ),
+            IconButton(
+              tooltip: '推进一次',
+              onPressed: isAdvancing ? null : onAdvance,
+              icon:
+                  isAdvancing
+                      ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                      : const Icon(Icons.skip_next_rounded),
+            ),
+          ],
+        ),
+        Text(status, style: Theme.of(context).textTheme.bodySmall),
+        const SizedBox(height: 10),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: colors.surfaceSoft,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: colors.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                isEnabled ? '当前状态' : '当前状态 · 未启用',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                summary.isEmpty ? '还没有生活状态记录。' : summary,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _LifeFactChip(label: '职业', value: occupation),
+                  _LifeFactChip(label: '作息', value: workStyle),
+                  _LifeFactChip(label: '住处', value: homeBase),
+                  _LifeFactChip(
+                    label: '精力',
+                    value: _formatEnergy(state['energy']),
+                  ),
+                  _LifeFactChip(
+                    label: '心情',
+                    value: _readString(state, 'mood', fallback: '未记录'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        if (_readString(plan, 'dayTheme').isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: colors.surfaceSoft,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: colors.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('今日计划', style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: 6),
+                Text(
+                  _readString(plan, 'dayTheme'),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 8),
+                for (final item in ((plan['plannedEvents'] as List?) ??
+                        const [])
+                    .whereType<Map>()
+                    .take(5))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      _joinFilled([
+                        (item['timeRange'] ?? '').toString(),
+                        (item['location'] ?? '').toString(),
+                        (item['activity'] ?? '').toString(),
+                      ], separator: ' · '),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+        const SizedBox(height: 10),
+        if (events.isEmpty)
+          Text('暂无轨迹事件。', style: Theme.of(context).textTheme.bodySmall)
+        else
+          Column(
+            children: [
+              for (final event in events.take(24)) _LifeEventRow(event: event),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+class _LifeFactChip extends StatelessWidget {
+  const _LifeFactChip({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: context.alicerColors.border),
+      ),
+      child: Text(
+        '$label：$value',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+    );
+  }
+}
+
+class _LifeEventRow extends StatelessWidget {
+  const _LifeEventRow({required this.event});
+
+  final Map<String, dynamic> event;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    final title = _joinFilled([
+      _readString(event, 'timeLabel'),
+      _readString(event, 'location'),
+      _readString(event, 'activity'),
+    ], separator: ' · ');
+    final summary = _readString(event, 'summary', fallback: '无摘要');
+    final mood = _readString(event, 'mood');
+    final canPost = event['canPostMoment'] == true;
+    final usedMomentId = _readString(event, 'usedMomentId');
+    final metadata = Map<String, dynamic>.from(
+      (event['metadata'] as Map?) ?? const {},
+    );
+    final source = _readString(metadata, 'source', fallback: 'unknown');
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 3),
+            child: Icon(
+              usedMomentId.isNotEmpty
+                  ? Icons.check_circle_outline_rounded
+                  : canPost
+                  ? Icons.photo_camera_back_outlined
+                  : Icons.circle,
+              size: usedMomentId.isNotEmpty || canPost ? 18 : 8,
+              color:
+                  usedMomentId.isNotEmpty
+                      ? colors.userBubble
+                      : canPost
+                      ? Theme.of(context).colorScheme.primary
+                      : colors.textMuted,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title.isEmpty ? '未标记时间' : title,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 2),
+                Text(summary, style: Theme.of(context).textTheme.bodySmall),
+                if (mood.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    '心情：$mood · 精力：${_formatEnergy(event['energy'])} · 来源：$source'
+                    '${usedMomentId.isEmpty ? '' : ' · 已发朋友圈'}',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: colors.textMuted),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _readString(
+  Map<String, dynamic> map,
+  String key, {
+  String fallback = '',
+}) {
+  final value = map[key]?.toString().trim() ?? '';
+  return value.isEmpty ? fallback : value;
+}
+
+String _joinFilled(List<String> items, {required String separator}) {
+  return items.where((item) => item.trim().isNotEmpty).join(separator);
+}
+
+String _formatEnergy(Object? value) {
+  final number =
+      value is num
+          ? value.toDouble()
+          : double.tryParse(value?.toString() ?? '');
+  if (number == null) return '未记录';
+  return '${(number.clamp(0.0, 1.0) * 100).round()}%';
 }
 
 class _SettingsHero extends StatelessWidget {

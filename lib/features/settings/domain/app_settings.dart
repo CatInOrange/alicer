@@ -294,6 +294,67 @@ class ChatContextSettings {
   }
 }
 
+class LifeSettings {
+  const LifeSettings({
+    this.enabled = true,
+    this.updateIntervalHours = 1,
+    this.randomness = 0.62,
+    this.autoMomentsFromLife = true,
+    this.profileRefreshHours = 24,
+  });
+
+  final bool enabled;
+  final int updateIntervalHours;
+  final double randomness;
+  final bool autoMomentsFromLife;
+  final int profileRefreshHours;
+
+  factory LifeSettings.fromJson(Map<String, dynamic> json) {
+    return LifeSettings(
+      enabled: json['enabled'] != false,
+      updateIntervalHours: _clampInt(json['updateIntervalHours'], 1, 1, 6),
+      randomness:
+          ((json['randomness'] as num?)?.toDouble() ?? 0.62).clamp(0.0, 1.0),
+      autoMomentsFromLife: json['autoMomentsFromLife'] != false,
+      profileRefreshHours: _clampInt(json['profileRefreshHours'], 24, 6, 168),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'updateIntervalHours': updateIntervalHours,
+    'randomness': randomness,
+    'autoMomentsFromLife': autoMomentsFromLife,
+    'profileRefreshHours': profileRefreshHours,
+  };
+
+  LifeSettings copyWith({
+    bool? enabled,
+    int? updateIntervalHours,
+    double? randomness,
+    bool? autoMomentsFromLife,
+    int? profileRefreshHours,
+  }) {
+    return LifeSettings(
+      enabled: enabled ?? this.enabled,
+      updateIntervalHours: _clampInt(
+        updateIntervalHours,
+        this.updateIntervalHours,
+        1,
+        6,
+      ),
+      randomness: randomness?.clamp(0.0, 1.0) ?? this.randomness,
+      autoMomentsFromLife: autoMomentsFromLife ?? this.autoMomentsFromLife,
+      profileRefreshHours: _clampInt(
+        profileRefreshHours,
+        this.profileRefreshHours,
+        6,
+        168,
+      ),
+    );
+  }
+}
+
 String normalizeHistoryMode(String value) {
   return switch (value) {
     'recent' || 'day' || 'month' || 'all' => value,
@@ -403,6 +464,7 @@ class AlicerSettings {
     this.memory = const MemoryToggles(),
     this.chatContext = const ChatContextSettings(),
     this.moments = const MomentsSettings(),
+    this.life = const LifeSettings(),
     this.model = const ModelSettings(),
   });
 
@@ -414,6 +476,7 @@ class AlicerSettings {
   final MemoryToggles memory;
   final ChatContextSettings chatContext;
   final MomentsSettings moments;
+  final LifeSettings life;
   final ModelSettings model;
 
   factory AlicerSettings.fromJson(Map<String, dynamic> json) {
@@ -440,6 +503,9 @@ class AlicerSettings {
       moments: MomentsSettings.fromJson(
         Map<String, dynamic>.from((json['moments'] as Map?) ?? const {}),
       ),
+      life: LifeSettings.fromJson(
+        Map<String, dynamic>.from((json['life'] as Map?) ?? const {}),
+      ),
       model: ModelSettings.fromJson(
         Map<String, dynamic>.from((json['model'] as Map?) ?? const {}),
       ),
@@ -455,6 +521,7 @@ class AlicerSettings {
     'memory': memory.toJson(),
     'chatContext': chatContext.toJson(),
     'moments': moments.toJson(),
+    'life': life.toJson(),
     'model': model.toJson(),
   };
 
@@ -465,6 +532,7 @@ class AlicerSettings {
     'memory': memory.toJson(),
     'chatContext': chatContext.toJson(),
     'moments': moments.toJson(),
+    'life': life.toJson(),
     'model': model.toJson(),
   };
 
@@ -477,6 +545,7 @@ class AlicerSettings {
     MemoryToggles? memory,
     ChatContextSettings? chatContext,
     MomentsSettings? moments,
+    LifeSettings? life,
     ModelSettings? model,
   }) {
     return AlicerSettings(
@@ -488,6 +557,7 @@ class AlicerSettings {
       memory: memory ?? this.memory,
       chatContext: chatContext ?? this.chatContext,
       moments: moments ?? this.moments,
+      life: life ?? this.life,
       model: model ?? this.model,
     );
   }
@@ -505,6 +575,7 @@ IconData promptModuleIcon(String id) {
     'reply_style' => Icons.chat_outlined,
     'emoji_style' => Icons.emoji_emotions_outlined,
     'environment' => Icons.wb_sunny_outlined,
+    'life_state' => Icons.timeline_outlined,
     'short_term_memory' => Icons.short_text_outlined,
     'long_term_memory' => Icons.auto_stories_outlined,
     _ => Icons.notes_outlined,
@@ -566,6 +637,15 @@ const defaultPromptModules = <PromptModule>[
     content: '当前环境：{{current.time}}{{current.location}}{{current.weather}}',
     enabled: true,
     order: 40,
+  ),
+  PromptModule(
+    id: 'life_state',
+    title: '伴侣生活状态',
+    description: '后台模拟的当前生活、最近轨迹和连续事件。',
+    icon: Icons.timeline_outlined,
+    content: '伴侣自己的生活状态：{{life.current}}',
+    enabled: true,
+    order: 45,
   ),
   PromptModule(
     id: 'short_term_memory',

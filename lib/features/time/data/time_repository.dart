@@ -40,11 +40,15 @@ class TimeRepository {
   }
 
   Future<MomentPost?> generateMoment() async {
-    final response = await _client.postJson('/api/moments/generate', {
-      'force': true,
-      'forcePhoto': true,
-      'settings': settings.toBackendJson(),
-    });
+    final response = await _client.postJson(
+      '/api/moments/generate',
+      {
+        'force': true,
+        'forcePhoto': true,
+        'settings': settings.toBackendJson(),
+      },
+      timeout: const Duration(seconds: 180),
+    );
     final raw = response['moment'];
     if (raw is! Map) return null;
     return MomentPost.fromJson(Map<String, dynamic>.from(raw));

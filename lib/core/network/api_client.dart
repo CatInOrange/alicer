@@ -48,6 +48,7 @@ class ApiClient {
     String path,
     Map<String, dynamic> body, {
     Map<String, String>? headers,
+    Duration timeout = const Duration(seconds: 75),
   }) async {
     final response = await _httpClient
         .post(
@@ -59,7 +60,7 @@ class ApiClient {
           },
           body: jsonEncode(body),
         )
-        .timeout(const Duration(seconds: 75));
+        .timeout(timeout);
     return _decodeResponse(response);
   }
 

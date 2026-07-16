@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from ..db import Database
+from ..services.life_service import build_life_context
 from ..services.prompt_service import merge_settings, render_prompt
 
 
@@ -28,6 +29,7 @@ def create_settings_router(db: Database) -> APIRouter:
             recent_messages=messages,
             memories=memories,
             environment=payload.get("environment") or {},
+            life_context=build_life_context(db, settings),
         )
         return {"messages": prompt_messages, "debug": debug}
 

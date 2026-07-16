@@ -65,7 +65,13 @@ class LlmService:
                     if text:
                         yield text
 
-    async def generate_image(self, *, prompt: str, bucket: str = "moments") -> dict:
+    async def generate_image(
+        self,
+        *,
+        prompt: str,
+        bucket: str = "moments",
+        reference_image_url: str | None = None,
+    ) -> dict:
         if not self.settings.image_api_key:
             return {
                 "imageUrl": "",
@@ -73,10 +79,11 @@ class LlmService:
             }
         mode = "edits"
         url = self.settings.image_base_url.rstrip("/") + "/images/edits"
+        reference_url = (reference_image_url or GROK_REFERENCE_IMAGE_URL).strip() or GROK_REFERENCE_IMAGE_URL
         payload = {
             "model": self.settings.image_model,
             "prompt": prompt,
-            "image": GROK_REFERENCE_IMAGE_URL,
+            "image": {"url": reference_url},
             "response_format": "b64_json",
         }
         async with httpx.AsyncClient(timeout=max(self.settings.request_timeout_seconds, 120)) as client:
@@ -88,7 +95,11 @@ class LlmService:
                 },
                 json=payload,
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                detail = response.text.strip()[:500]
+                raise RuntimeError(f"image provider returned {response.status_code}: {detail}") from exc
             data = response.json()
         first = ((data.get("data") or [{}])[0] or {})
         b64 = first.get("b64_json") or first.get("b64")
@@ -102,7 +113,7 @@ class LlmService:
                         "model": self.settings.image_model,
                         "remote": False,
                         "mode": mode,
-                        "referenceImageUrl": GROK_REFERENCE_IMAGE_URL,
+                        "referenceImageUrl": reference_url,
                     },
                 }
             return {
@@ -112,7 +123,7 @@ class LlmService:
                     "model": self.settings.image_model,
                     "remote": True,
                     "mode": mode,
-                    "referenceImageUrl": GROK_REFERENCE_IMAGE_URL,
+                    "referenceImageUrl": reference_url,
                 },
             }
         if not b64:
@@ -126,7 +137,7 @@ class LlmService:
                 "model": self.settings.image_model,
                 "remote": False,
                 "mode": mode,
-                "referenceImageUrl": GROK_REFERENCE_IMAGE_URL,
+                "referenceImageUrl": reference_url,
             },
         }
 

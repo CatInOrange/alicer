@@ -952,7 +952,10 @@ async def _generate_rift_image(
     user_name: str,
 ) -> dict:
     moments_settings = settings.get("moments") or {}
-    reference_image_url = GROK_REFERENCE_IMAGE_URL
+    reference_image_url = (
+        str(moments_settings.get("referenceImageUrl") or "").strip()
+        or GROK_REFERENCE_IMAGE_URL
+    )
     identity_prompt_prefix = _render_companion_vars(
         str(moments_settings.get("identityPromptPrefix") or "").strip() or _default_identity_prompt_prefix(),
         companion=companion,
@@ -974,6 +977,7 @@ async def _generate_rift_image(
         return await llm.generate_image(
             prompt=prompt,
             bucket="rifts",
+            reference_image_url=reference_image_url,
         )
     except Exception as exc:
         return {

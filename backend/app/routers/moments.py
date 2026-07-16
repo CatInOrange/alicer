@@ -4,7 +4,6 @@ import asyncio
 import base64
 import binascii
 import datetime as dt
-import hashlib
 import random
 import uuid
 from zoneinfo import ZoneInfo
@@ -12,6 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException
 
 from ..db import Database
+from ..services.life_service import advance_life_until_now, choose_moment_life_event
 from ..services.llm_service import GROK_REFERENCE_IMAGE_URL, LlmService
 from ..services.prompt_service import merge_settings
 
@@ -188,14 +188,23 @@ async def _generate_moment(
     user_name = str(((settings.get("companion") or {}).get("userName") or "用户")).strip() or "用户"
     moments_settings = settings.get("moments") or {}
     photo_probability = _probability(moments_settings.get("photoProbability"), default=0.45)
-    reference_image_url = GROK_REFERENCE_IMAGE_URL
+    reference_image_url = (
+        str(moments_settings.get("referenceImageUrl") or "").strip()
+        or GROK_REFERENCE_IMAGE_URL
+    )
     identity_prompt_prefix = _render_companion_vars(
         str(moments_settings.get("identityPromptPrefix") or "").strip() or _default_identity_prompt_prefix(),
         companion=companion,
         user_name=user_name,
     )
     role_context = _companion_context(settings, companion=companion, user_name=user_name)
-    strategy = _build_moment_strategy(db, settings=settings, source=source)
+    life_result = await advance_life_until_now(db, llm, settings=settings)
+    life_event = (
+        choose_moment_life_event(db)
+        if (settings.get("life") or {}).get("autoMomentsFromLife") is not False
+        else None
+    )
+    strategy = _build_moment_strategy(db, settings=settings, source=source, life_event=life_event)
     recent = db.list_messages(limit=120)
     recent_text = "\n".join(
         f"- {item['role']}: {item['content'][:300]}" for item in recent[-40:] if item.get("content")
@@ -211,9 +220,13 @@ async def _generate_moment(
                 "不要出现“我在你的公司/单位/项目里”这类混淆身份的内容。"
                 "内容和 imagePrompt 都禁止出现“咖啡”两个字，也不要使用英文 coffee。"
                 "像真实的人，不要像公告；文字短一点、有生活感，允许少量 emoji。"
+                "朋友圈必须从“当前生活事件”自然长出来；如果最近聊天和生活事件冲突，以生活事件为准。"
+                "如果提供了当前生活事件，content 和 imagePrompt 的主场景必须是这个事件，不要改写成无关的植物、读书、散步或其他主题。"
+                "不要临时改写自己的职业、住处、长期习惯。"
                 "输出 JSON：content 是朋友圈正文，imagePrompt 是给图像模型的照片提示词，moodTag 是 2 到 4 个字的情绪标签。"
                 "imagePrompt 只描述你自己的随手拍场景、衣着、光线和动作，不要描述用户，不要出现其他主要人物。"
                 f"\n\n你的稳定角色设定：\n{role_context or '温柔、独立、有自己的日常节奏。'}"
+                f"\n\n当前生活状态：\n{_life_context_prompt(life_result.get('context') or {})}"
                 f"\n\n今天的朋友圈策略：\n{_strategy_prompt(strategy)}"
             ),
         },
@@ -236,15 +249,30 @@ async def _generate_moment(
     mood_tag = strategy.get("moodTag") or "日常" if _has_blocked_scene_term(mood_tag) else mood_tag
     image = {"imageUrl": "", "provider": {"skippedByProbability": True}}
     if force_photo or random.random() <= photo_probability:
-        image = await llm.generate_image(
-            prompt=(
-                f"{identity_prompt_prefix.strip()} "
-                f"Scene: {image_prompt}"
-            ),
-            bucket="moments",
-        )
+        try:
+            image = await llm.generate_image(
+                prompt=(
+                    f"{identity_prompt_prefix.strip()} "
+                    f"Scene: {image_prompt}"
+                ),
+                bucket="moments",
+                reference_image_url=reference_image_url,
+            )
+        except Exception as exc:
+            image = {
+                "imageUrl": "",
+                "provider": {
+                    "configured": bool(getattr(llm.settings, "image_api_key", "")),
+                    "model": getattr(llm.settings, "image_model", ""),
+                    "referenceImageUrl": reference_image_url,
+                    "error": str(exc)[:500],
+                },
+            }
+    moment_id = f"mom_{uuid.uuid4().hex}"
+    if life_event and life_event.get("id"):
+        life_event = db.mark_life_event_used_for_moment(str(life_event["id"]), moment_id) or life_event
     return db.add_moment(
-        moment_id=f"mom_{uuid.uuid4().hex}",
+        moment_id=moment_id,
         author=companion,
         content=content,
         image_url=str(image.get("imageUrl") or ""),
@@ -256,13 +284,12 @@ async def _generate_moment(
             "referenceImageUrl": reference_image_url,
             "identityPromptPrefix": identity_prompt_prefix,
             "source": source,
-            "lifeThread": strategy["lifeThread"],
+            "lifeEvent": life_event,
             "specialEvent": strategy["specialEvent"],
             "visibility": strategy["visibility"],
             "relationshipStage": strategy["relationshipStage"],
             "engagementMemory": strategy["engagementMemory"],
             "environmentCue": strategy["environmentCue"],
-            "sceneType": strategy["sceneType"],
             "moodTag": mood_tag,
         },
     )
@@ -330,12 +357,11 @@ def _has_blocked_scene_term(text: str) -> bool:
     return "咖啡" in text or "coffee" in lowered
 
 
-def _build_moment_strategy(db: Database, *, settings: dict, source: str) -> dict:
+def _build_moment_strategy(db: Database, *, settings: dict, source: str, life_event: dict | None) -> dict:
     now = dt.datetime.now(TZ)
     recent_moments = db.list_moments(limit=24)
     recent_messages = db.list_messages(limit=300)
     engagement = _moment_engagement(recent_moments, settings=settings)
-    life_thread = _select_life_thread(recent_moments, now=now)
     special_event = _select_special_event(now=now, source=source)
     visibility = _select_visibility(recent_moments, source=source)
     relationship_stage = _relationship_stage(
@@ -343,75 +369,20 @@ def _build_moment_strategy(db: Database, *, settings: dict, source: str) -> dict
         comment_count=sum(len(item.get("comments") or []) for item in recent_moments),
         like_count=sum(len(item.get("likes") or []) for item in recent_moments),
     )
-    scene_type = _select_scene_type(engagement=engagement, special_event=special_event, now=now)
-    mood_tag = _select_mood_tag(relationship_stage=relationship_stage, special_event=special_event, now=now)
+    mood_tag = _select_mood_tag(
+        relationship_stage=relationship_stage,
+        special_event=special_event,
+        now=now,
+        life_event=life_event or {},
+    )
     return {
-        "lifeThread": life_thread,
+        "lifeEvent": life_event,
         "specialEvent": special_event,
         "visibility": visibility,
         "relationshipStage": relationship_stage,
         "engagementMemory": engagement,
         "environmentCue": _environment_cue(now),
-        "sceneType": scene_type,
         "moodTag": mood_tag,
-    }
-
-
-def _select_life_thread(recent_moments: list[dict], *, now: dt.datetime) -> dict:
-    threads = [
-        {
-            "key": "plant",
-            "title": "窗台植物照料",
-            "beats": ["修剪黄叶", "换个晒得到光的位置", "记录新芽", "给叶片擦灰", "挑一个小花盆"],
-        },
-        {
-            "key": "reading",
-            "title": "读完一本小书",
-            "beats": ["翻到喜欢的一页", "抄一句不肉麻的话", "在书里夹票根", "睡前读两页", "整理书桌角落"],
-        },
-        {
-            "key": "fitness",
-            "title": "慢慢恢复运动",
-            "beats": ["拉伸十分钟", "傍晚散步", "试一组轻训练", "买一瓶电解质水", "记录身体状态"],
-        },
-        {
-            "key": "craft",
-            "title": "做一个小手作",
-            "beats": ["挑材料", "改一个细节", "拍半成品", "收拾工具", "完成一点点"],
-        },
-        {
-            "key": "city_walk",
-            "title": "附近随便走走",
-            "beats": ["走一条没走过的小路", "看见橱窗倒影", "拍下路灯刚亮", "买一份小点心", "绕远路回家"],
-        },
-    ]
-    previous = next(
-        (
-            (item.get("metadata") or {}).get("lifeThread")
-            for item in recent_moments
-            if ((item.get("metadata") or {}).get("lifeThread") or {}).get("key")
-        ),
-        None,
-    )
-    if isinstance(previous, dict) and random.random() < 0.62:
-        thread = next((item for item in threads if item["key"] == previous.get("key")), None)
-        if thread is not None:
-            step = min(int(previous.get("step") or 0) + 1, len(thread["beats"]) - 1)
-            return {
-                "key": thread["key"],
-                "title": thread["title"],
-                "step": step,
-                "beat": thread["beats"][step],
-                "continued": True,
-            }
-    seed = int(hashlib.sha1(now.date().isoformat().encode()).hexdigest()[:8], 16)
-    thread = threads[seed % len(threads)]
-    return {
-        "key": thread["key"],
-        "title": thread["title"],
-        "step": 0,
-        "beat": thread["beats"][0],
-        "continued": False,
     }
 
 
@@ -463,44 +434,31 @@ def _relationship_stage(*, message_count: int, comment_count: int, like_count: i
 
 def _moment_engagement(recent_moments: list[dict], *, settings: dict) -> dict:
     user_name = str(((settings.get("companion") or {}).get("userName") or "你")).strip() or "你"
-    liked_types: dict[str, int] = {}
+    liked_activities: dict[str, int] = {}
     comments: list[str] = []
     for item in recent_moments:
         metadata = item.get("metadata") or {}
-        scene_type = str(metadata.get("sceneType") or "").strip()
-        if scene_type and user_name in (item.get("likes") or []):
-            liked_types[scene_type] = liked_types.get(scene_type, 0) + 1
+        life_event = metadata.get("lifeEvent") or {}
+        activity = str(life_event.get("activity") or "").strip()
+        if activity and user_name in (item.get("likes") or []):
+            liked_activities[activity] = liked_activities.get(activity, 0) + 1
         for comment in item.get("comments") or []:
             if str(comment.get("author") or "") == user_name:
                 text = str(comment.get("content") or "").strip()
                 if text:
                     comments.append(text[:80])
-    favorite_scene = max(liked_types, key=liked_types.get) if liked_types else ""
+    favorite_activity = max(liked_activities, key=liked_activities.get) if liked_activities else ""
     return {
-        "favoriteSceneType": favorite_scene,
+        "favoriteActivity": favorite_activity,
         "recentUserComments": comments[-5:],
-        "likedSceneTypes": liked_types,
+        "likedActivities": liked_activities,
     }
 
 
-def _select_scene_type(*, engagement: dict, special_event: dict, now: dt.datetime) -> str:
-    if special_event.get("key"):
-        return str(special_event["key"])
-    favorite = str(engagement.get("favoriteSceneType") or "")
-    if favorite and random.random() < 0.45:
-        return favorite
-    if 6 <= now.hour < 11:
-        choices = ["morning", "city_walk", "reading", "outfit"]
-    elif 11 <= now.hour < 15:
-        choices = ["lunch_break", "desk", "small_win", "plant"]
-    elif 18 <= now.hour < 22:
-        choices = ["walk", "dinner", "craft", "fitness"]
-    else:
-        choices = ["night", "reading", "quiet_room", "night_thought"]
-    return random.choice(choices)
-
-
-def _select_mood_tag(*, relationship_stage: dict, special_event: dict, now: dt.datetime) -> str:
+def _select_mood_tag(*, relationship_stage: dict, special_event: dict, now: dt.datetime, life_event: dict) -> str:
+    mood = str(life_event.get("mood") or "").strip()
+    if mood:
+        return mood[:12]
     if special_event.get("key") == "small_win":
         return "小得意"
     if special_event.get("key") == "tired":
@@ -533,29 +491,66 @@ def _environment_cue(now: dt.datetime) -> dict:
 
 
 def _strategy_prompt(strategy: dict) -> str:
-    life_thread = strategy["lifeThread"]
+    life_event = strategy.get("lifeEvent") or {}
     special_event = strategy["specialEvent"]
     visibility = strategy["visibility"]
     relationship = strategy["relationshipStage"]
-    return "\n".join(
-        [
-            f"- 连续生活线：{life_thread['title']} / 当前片段：{life_thread['beat']} / {'延续上一条' if life_thread.get('continued') else '开启新线索'}。",
-            f"- 场景类型：{strategy['sceneType']}；情绪标签倾向：{strategy['moodTag']}。",
-            f"- 关系阶段：{relationship['label']}。{relationship['cue']}",
-            f"- 可见范围：{visibility['label'] or '普通可见'}。{visibility['cue']}",
-            f"- 环境线索：{strategy['environmentCue']['cue']}",
-            f"- 偶发事件：{special_event['label'] or '无'}。{special_event['cue'] or '保持普通日常。'}",
-            "- 必须让她像有自己的生活轨迹：今天这条动态应服务于上面的生活线或事件，不要只复述聊天。",
-        ]
-    )
+    lines = [
+        f"- 关系阶段：{relationship['label']}。{relationship['cue']}",
+        f"- 可见范围：{visibility['label'] or '普通可见'}。{visibility['cue']}",
+        f"- 环境线索：{strategy['environmentCue']['cue']}",
+        f"- 偶发事件：{special_event['label'] or '无'}。{special_event['cue'] or '保持普通日常。'}",
+    ]
+    if life_event:
+        lines.insert(0, "- 主线优先级：当前生活事件 > 最近生活轨迹 > 聊天灵感。")
+        lines.append(
+            "- 当前生活事件："
+            f"{life_event.get('timeLabel') or ''} "
+            f"{life_event.get('location') or ''} / {life_event.get('activity') or ''}；"
+            f"{life_event.get('summary') or ''}"
+        )
+        if life_event.get("continuity"):
+            lines.append(f"- 连续性说明：{life_event['continuity']}")
+        if life_event.get("details"):
+            lines.append(f"- 事件细节：{life_event['details']}")
+    else:
+        lines.insert(
+            0,
+            "- 暂无可用生活事件：只写当前状态里的自然日常，不要创造固定植物、读书、健身等模板主线。",
+        )
+    lines.append(f"- 情绪标签倾向：{strategy['moodTag']}。")
+    lines.append("- 必须让她像有自己的生活轨迹：今天这条动态应服务于上面的生活线或事件，不要只复述聊天。")
+    return "\n".join(lines)
+
+
+def _life_context_prompt(life_context: dict) -> str:
+    if not life_context or life_context.get("enabled") is False:
+        return "生活模拟未启用。"
+    state = life_context.get("state") or {}
+    profile = life_context.get("profile") or {}
+    plan = life_context.get("plan") or {}
+    recent = life_context.get("recentEvents") or []
+    lines = [
+        f"- 稳定画像：{profile.get('occupation') or '普通日常'}；作息 {profile.get('sleepWindow') or '未指定'}；常去 {', '.join(profile.get('usualPlaces') or [])}",
+        f"- 当前：{state.get('location') or ''} / {state.get('activity') or ''} / {state.get('summary') or ''}",
+    ]
+    if plan.get("dayTheme"):
+        lines.append(f"- 今日计划：{plan['dayTheme']}")
+    if recent:
+        lines.append("- 最近轨迹：")
+        for item in recent[-6:]:
+            lines.append(
+                f"  - {item.get('timeLabel') or ''} {item.get('location') or ''}：{item.get('summary') or item.get('activity') or ''}"
+            )
+    return "\n".join(lines)
 
 
 def _interaction_context(engagement: dict) -> str:
-    favorite = str(engagement.get("favoriteSceneType") or "")
+    favorite = str(engagement.get("favoriteActivity") or "")
     comments = engagement.get("recentUserComments") or []
     lines = []
     if favorite:
-        lines.append(f"- 用户最近更容易点赞的场景类型：{favorite}。可以参考，但不要每次重复。")
+        lines.append(f"- 用户最近更容易点赞的生活活动：{favorite}。可以参考，但不要每次重复。")
     if comments:
         lines.append("- 用户最近在朋友圈评论过：")
         lines.extend(f"  - {item}" for item in comments)
