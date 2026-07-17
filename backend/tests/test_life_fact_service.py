@@ -72,6 +72,53 @@ class LifeFactServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(prompt_payload["userMessage"]["createdAt"], anchor.isoformat())
         self.assertEqual(prompt_payload["userLifeDay"], "2026-07-17")
 
+    async def test_reconcile_refreshes_today_plan_after_plan_affecting_fact(self) -> None:
+        now = dt.datetime.now(TZ).replace(minute=0, second=0, microsecond=0)
+        start = now
+        end = start + dt.timedelta(hours=3)
+        llm = FakeLlm(
+            {
+                "facts": [
+                    {
+                        "type": "schedule_commitment",
+                        "title": "今天下午执飞航班",
+                        "summary": "今天下午有一趟已确定航班。",
+                        "startsAt": start.isoformat(),
+                        "endsAt": end.isoformat(),
+                        "confidence": 0.9,
+                        "importance": 0.8,
+                        "status": "planned",
+                    }
+                ]
+            }
+        )
+
+        facts = await extract_life_facts(
+            self.db,
+            llm,  # type: ignore[arg-type]
+            settings={"life": {"enabled": True}},
+            user_message={
+                "id": "msg_user_reconcile",
+                "content": "你今天下午是不是要飞？",
+                "createdAt": now.timestamp(),
+            },
+            assistant_message={
+                "id": "msg_assistant_reconcile",
+                "content": "嗯，今天下午有一趟航班。",
+                "createdAt": now.timestamp() + 10,
+            },
+            reconcile=True,
+        )
+
+        self.assertEqual(len(facts), 1)
+        job = self.db.get_scheduled_job("consistency:life_projection:last")
+        self.assertIsNotNone(job)
+        self.assertTrue(job["result"]["refreshedTodayPlan"])
+        plan = (self.db.get_life_state() or {}).get("plan") or {}
+        hard_blocks = json.dumps(plan.get("hardBlocks") or [], ensure_ascii=False)
+        self.assertIn(facts[0]["id"], hard_blocks)
+        self.assertIn("航班", hard_blocks)
+
     def test_cleanup_supersedes_duplicate_active_facts(self) -> None:
         starts_at = dt.datetime(2026, 7, 18, 9, 0, tzinfo=TZ).timestamp()
         self.db.upsert_life_fact(

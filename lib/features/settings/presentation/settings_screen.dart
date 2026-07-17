@@ -562,8 +562,144 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             _CollapsiblePanel(
+              icon: Icons.volunteer_activism_outlined,
+              title: '主动引擎',
+              subtitle: '决定她什么时候主动聊天或发布朋友圈，默认多数时候选择沉默。',
+              child: Column(
+                children: [
+                  _SwitchRow(
+                    icon: Icons.waving_hand_outlined,
+                    title: '启用主动行为',
+                    subtitle: '允许后端定期评估候选动作，并按分数、冷却和静默时间决定是否执行。',
+                    value: _settings.proactive.enabled,
+                    onChanged:
+                        (value) => _setProactive(
+                          _settings.proactive.copyWith(enabled: value),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.update_rounded,
+                    title: '评估间隔',
+                    subtitle:
+                        '每 ${_settings.proactive.intervalMinutes} 分钟评估一次候选动作。',
+                    value: _settings.proactive.intervalMinutes,
+                    min: 5,
+                    max: 180,
+                    divisions: 35,
+                    onChanged:
+                        (value) => _setProactive(
+                          _settings.proactive.copyWith(intervalMinutes: value),
+                        ),
+                  ),
+                  _ActionRow(
+                    icon: Icons.nightlight_round,
+                    title: '静默窗口',
+                    subtitle:
+                        '${_settings.proactive.quietHours.start} - ${_settings.proactive.quietHours.end} · 静默时不主动打扰。',
+                    onTap: null,
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.hourglass_bottom_outlined,
+                    title: '聊天前空窗',
+                    subtitle:
+                        '用户最后发言后至少 ${_settings.proactive.minIdleHoursBeforeChat} 小时，才考虑主动关心。',
+                    value: _settings.proactive.minIdleHoursBeforeChat,
+                    min: 1,
+                    max: 72,
+                    divisions: 71,
+                    onChanged:
+                        (value) => _setProactive(
+                          _settings.proactive.copyWith(
+                            minIdleHoursBeforeChat: value,
+                          ),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.chat_bubble_outline_rounded,
+                    title: '聊天冷却',
+                    subtitle:
+                        '两次主动聊天至少间隔 ${_settings.proactive.minHoursBetweenChat} 小时。',
+                    value: _settings.proactive.minHoursBetweenChat,
+                    min: 1,
+                    max: 24,
+                    divisions: 23,
+                    onChanged:
+                        (value) => _setProactive(
+                          _settings.proactive.copyWith(
+                            minHoursBetweenChat: value,
+                          ),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.auto_awesome_motion_outlined,
+                    title: '朋友圈冷却',
+                    subtitle:
+                        '两次主动朋友圈至少间隔 ${_settings.proactive.minHoursBetweenMoments} 小时。',
+                    value: _settings.proactive.minHoursBetweenMoments,
+                    min: 1,
+                    max: 48,
+                    divisions: 47,
+                    onChanged:
+                        (value) => _setProactive(
+                          _settings.proactive.copyWith(
+                            minHoursBetweenMoments: value,
+                          ),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.today_outlined,
+                    title: '每日主动聊天上限',
+                    subtitle: '每天最多 ${_settings.proactive.maxChatPerDay} 次。',
+                    value: _settings.proactive.maxChatPerDay,
+                    min: 0,
+                    max: 12,
+                    divisions: 12,
+                    onChanged:
+                        (value) => _setProactive(
+                          _settings.proactive.copyWith(maxChatPerDay: value),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.photo_camera_back_outlined,
+                    title: '每日主动朋友圈上限',
+                    subtitle: '每天最多 ${_settings.proactive.maxMomentsPerDay} 条。',
+                    value: _settings.proactive.maxMomentsPerDay,
+                    min: 0,
+                    max: 6,
+                    divisions: 6,
+                    onChanged:
+                        (value) => _setProactive(
+                          _settings.proactive.copyWith(maxMomentsPerDay: value),
+                        ),
+                  ),
+                  _SliderRow(
+                    icon: Icons.speed_outlined,
+                    title: '聊天触发阈值',
+                    subtitle:
+                        '${(_settings.proactive.chatThreshold * 100).round()}% · 越高越克制。',
+                    value: _settings.proactive.chatThreshold,
+                    onChanged:
+                        (value) => _setProactive(
+                          _settings.proactive.copyWith(chatThreshold: value),
+                        ),
+                  ),
+                  _SliderRow(
+                    icon: Icons.filter_alt_outlined,
+                    title: '朋友圈触发阈值',
+                    subtitle:
+                        '${(_settings.proactive.momentThreshold * 100).round()}% · 越高越少发。',
+                    value: _settings.proactive.momentThreshold,
+                    onChanged:
+                        (value) => _setProactive(
+                          _settings.proactive.copyWith(momentThreshold: value),
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            _CollapsiblePanel(
               icon: Icons.photo_camera_back_outlined,
-              title: '聊天照片',
+              title: '照片生成',
               subtitle: '聊天里请求自拍、主动生活照和每日额度。',
               child: Column(
                 children: [
@@ -634,8 +770,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.photo_camera_back_outlined,
-              title: '朋友圈',
-              subtitle: '伴侣自动发朋友圈的频率和真实感。',
+              title: '朋友圈生成',
+              subtitle: 'Moment Engine 的发布概率、照片概率和身份参考。',
               child: Column(
                 children: [
                   _SliderRow(
@@ -884,6 +1020,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _setChatPhotos(ChatPhotoSettings chatPhotos) {
     setState(() => _settings = _settings.copyWith(chatPhotos: chatPhotos));
+    unawaited(SettingsStore.save(_settings));
+  }
+
+  void _setProactive(ProactiveSettings proactive) {
+    setState(() => _settings = _settings.copyWith(proactive: proactive));
     unawaited(SettingsStore.save(_settings));
   }
 
@@ -3155,7 +3296,7 @@ class _AvatarPicker extends StatelessWidget {
   final String label;
   final String path;
   final String fallback;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -3384,7 +3525,7 @@ class _ActionRow extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -3412,7 +3553,7 @@ class _ActionRow extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right_rounded),
+            if (onTap != null) const Icon(Icons.chevron_right_rounded),
           ],
         ),
       ),

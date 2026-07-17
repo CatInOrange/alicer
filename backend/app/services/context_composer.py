@@ -34,7 +34,10 @@ def compose_prompt_context(
     world_guardrails = _format_world_guardrails(world_context)
     world_legacy = _format_world_context(world_context)
     life_text = _format_life_context(life_context)
+    freshness = _build_projection_freshness(life_context=life_context, world_context=world_context)
+    projection_freshness = _format_projection_freshness(freshness)
     context_brief = _format_context_brief(
+        projection_freshness=projection_freshness,
         current=world_current,
         future=world_future,
         commitments=world_commitments,
@@ -64,6 +67,7 @@ def compose_prompt_context(
         "world.photos": world_photos,
         "world.memory": world_memory,
         "world.guardrails": world_guardrails,
+        "context.freshness": projection_freshness,
         "context.brief": context_brief,
         "life.current": life_text,
         "user.current": world_user,
@@ -79,6 +83,7 @@ def compose_prompt_context(
         "package": {
             "world": {
                 "brief": context_brief,
+                "freshness": projection_freshness,
                 "current": world_current,
                 "future": world_future,
                 "commitments": world_commitments,
@@ -96,6 +101,7 @@ def compose_prompt_context(
                 "worldFacts": len(world_context.get("activeFacts") or []),
                 "lifeEvents": len(life_context.get("recentEvents") or []),
             },
+            "freshness": freshness,
         },
         "promptHistory": prompt_history,
     }
@@ -103,6 +109,7 @@ def compose_prompt_context(
 
 def _format_context_brief(
     *,
+    projection_freshness: str,
     current: str,
     future: str,
     commitments: str,
@@ -116,6 +123,7 @@ def _format_context_brief(
 ) -> str:
     sections = [
         ("最高优先级一致性规则", guardrails),
+        ("投影新鲜度", projection_freshness),
         ("Alicer 当前状态", current),
         ("Alicer 未来时间线", future),
         ("未完成承诺、计划和稳定事实", commitments),
@@ -135,6 +143,57 @@ def _format_context_brief(
         if not text:
             continue
         lines.append(f"\n## {title}\n{text}")
+    return "\n".join(lines)
+
+
+def _build_projection_freshness(*, life_context: dict, world_context: dict) -> dict:
+    generated_at = dt.datetime.now().astimezone().isoformat()
+    plan = life_context.get("plan") or {}
+    world_freshness = world_context.get("freshness") or {}
+    reconciliation = world_freshness.get("lastReconciliation") or {}
+    reconciliation_result = reconciliation.get("result") if isinstance(reconciliation, dict) else {}
+    latest_fact_updated_at = _to_float(world_freshness.get("latestFactUpdatedAt"))
+    life_state_updated_at = _to_float(life_context.get("updatedAt"))
+    return {
+        "contextGeneratedAt": generated_at,
+        "latestFactUpdatedAt": latest_fact_updated_at,
+        "latestFactUpdatedAtText": _format_ts(latest_fact_updated_at),
+        "lifeStateUpdatedAt": life_state_updated_at,
+        "lifeStateUpdatedAtText": _format_ts(life_state_updated_at),
+        "planGeneratedAt": str(plan.get("generatedAt") or ""),
+        "planSource": str(plan.get("source") or ""),
+        "lastReconciledAt": _to_float(reconciliation.get("ranAt")) if isinstance(reconciliation, dict) else None,
+        "lastReconciledAtText": _format_ts(_to_float(reconciliation.get("ranAt")) if isinstance(reconciliation, dict) else None),
+        "lastReconciliation": reconciliation_result or {},
+    }
+
+
+def _format_projection_freshness(freshness: dict) -> str:
+    lines = [
+        f"- Context Package 生成：{freshness.get('contextGeneratedAt') or '未知'}",
+    ]
+    if freshness.get("latestFactUpdatedAtText"):
+        lines.append(f"- 最新事实账本更新：{freshness['latestFactUpdatedAtText']}")
+    else:
+        lines.append("- 最新事实账本更新：暂无 active/candidate/planned 事实。")
+    if freshness.get("lifeStateUpdatedAtText"):
+        lines.append(f"- 生活状态更新：{freshness['lifeStateUpdatedAtText']}")
+    if freshness.get("planGeneratedAt"):
+        source = str(freshness.get("planSource") or "").strip()
+        suffix = f"，来源 {source}" if source else ""
+        lines.append(f"- 今日计划生成：{freshness['planGeneratedAt']}{suffix}")
+    if freshness.get("lastReconciledAtText"):
+        result = freshness.get("lastReconciliation") or {}
+        reason = str(result.get("sourceReason") or result.get("reason") or "").strip()
+        refreshed = result.get("refreshedTodayPlan")
+        parts = [freshness["lastReconciledAtText"]]
+        if reason:
+            parts.append(f"原因 {reason}")
+        if refreshed is not None:
+            parts.append(f"刷新今日计划 {bool(refreshed)}")
+        lines.append("- 最近一致性调和：" + "，".join(parts))
+    else:
+        lines.append("- 最近一致性调和：暂无记录。")
     return "\n".join(lines)
 
 
@@ -603,6 +662,22 @@ def _created_at(item: dict) -> dt.datetime:
     except (TypeError, ValueError):
         return dt.datetime.fromtimestamp(0, tz=dt.timezone.utc)
     return dt.datetime.fromtimestamp(value, tz=dt.timezone.utc).astimezone()
+
+
+def _to_float(value: object) -> float | None:
+    try:
+        if value is None:
+            return None
+        parsed = float(value)
+        return parsed if parsed > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_ts(value: float | None) -> str:
+    if value is None:
+        return ""
+    return dt.datetime.fromtimestamp(value, tz=dt.timezone.utc).astimezone().isoformat()
 
 
 def _clamp_int(value: object, *, default: int, minimum: int, maximum: int) -> int:

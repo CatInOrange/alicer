@@ -4,9 +4,9 @@ from fastapi import APIRouter
 
 from ..db import Database
 from ..services.llm_service import LlmService
+from ..services.moment_service import generate_life_moment
 from ..services.proactive_service import debug_candidates, run_proactive_once
 from ..services.prompt_service import merge_settings
-from .moments import generate_life_moment
 
 
 def create_proactive_router(db: Database, llm: LlmService) -> APIRouter:
@@ -33,4 +33,3 @@ def create_proactive_router(db: Database, llm: LlmService) -> APIRouter:
         )
 
     return router
-

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-import time
-
 from fastapi import APIRouter, HTTPException
 
-from ..db import Database, uuid_like
+from ..db import Database
+from ..services.life_fact_app_service import (
+    cancel_manual_life_fact,
+    complete_manual_life_fact,
+    create_manual_life_fact,
+    supersede_manual_life_fact,
+    update_manual_life_fact,
+)
 from ..services.life_fact_service import (
     audit_life_facts,
     build_world_context,
     cleanup_life_facts,
-    normalize_fact_patch,
     refresh_life_facts_from_recent_chat,
 )
 from ..services.life_service import advance_life_until_now, build_life_context, refresh_life_plan
@@ -64,75 +68,40 @@ def create_life_router(db: Database, llm: LlmService) -> APIRouter:
         return await refresh_life_facts_from_recent_chat(db, llm, settings=settings, limit=limit)
 
     @router.post("/life/facts")
-    def create_life_fact(body: dict | None = None) -> dict:
+    async def create_life_fact(body: dict | None = None) -> dict:
         payload = body or {}
-        patch = normalize_fact_patch(payload)
-        fact_type = patch.pop("fact_type", "schedule_commitment")
-        status = patch.pop("status", "candidate")
-        title = str(patch.pop("title", payload.get("title", "")) or "").strip()
-        summary = str(patch.pop("summary", payload.get("summary", title)) or title).strip()
-        if not title and not summary:
-            raise HTTPException(status_code=400, detail="title or summary is required")
-        fact = db.upsert_life_fact(
-            fact_id=str(payload.get("id") or f"fact_{uuid_like()}"),
-            fact_type=fact_type,
-            status=status,
-            title=title or summary[:80],
-            summary=summary or title,
-            source=str(payload.get("source") or "manual"),
-            source_message_id=str(payload.get("sourceMessageId") or ""),
-            **patch,
-        )
-        return {"fact": fact, "audit": audit_life_facts(db)}
+        try:
+            return await create_manual_life_fact(db, llm, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="title or summary is required") from exc
 
     @router.patch("/life/facts/{fact_id}")
-    def update_life_fact(fact_id: str, body: dict | None = None) -> dict:
-        patch = normalize_fact_patch(body or {})
-        if not patch:
-            fact = db.get_life_fact(fact_id)
-            if fact is None:
-                raise HTTPException(status_code=404, detail="fact not found")
-            return {"fact": fact}
-        fact = db.update_life_fact(fact_id, **patch)
-        if fact is None:
+    async def update_life_fact(fact_id: str, body: dict | None = None) -> dict:
+        result = await update_manual_life_fact(db, llm, fact_id, body or {})
+        if result is None:
             raise HTTPException(status_code=404, detail="fact not found")
-        return {"fact": fact, "audit": audit_life_facts(db)}
+        return result
 
     @router.post("/life/facts/{fact_id}/cancel")
-    def cancel_life_fact(fact_id: str, body: dict | None = None) -> dict:
-        fact = db.update_life_fact_status(
-            fact_id,
-            status="cancelled",
-            metadata={"cancelledAt": time.time(), **((body or {}).get("metadata") or {})},
-        )
-        if fact is None:
+    async def cancel_life_fact(fact_id: str, body: dict | None = None) -> dict:
+        result = await cancel_manual_life_fact(db, llm, fact_id, body or {})
+        if result is None:
             raise HTTPException(status_code=404, detail="fact not found")
-        return {"fact": fact, "audit": audit_life_facts(db)}
+        return result
 
     @router.post("/life/facts/{fact_id}/complete")
-    def complete_life_fact(fact_id: str, body: dict | None = None) -> dict:
-        fact = db.update_life_fact_status(
-            fact_id,
-            status="completed",
-            metadata={"completedAt": time.time(), **((body or {}).get("metadata") or {})},
-        )
-        if fact is None:
+    async def complete_life_fact(fact_id: str, body: dict | None = None) -> dict:
+        result = await complete_manual_life_fact(db, llm, fact_id, body or {})
+        if result is None:
             raise HTTPException(status_code=404, detail="fact not found")
-        return {"fact": fact, "audit": audit_life_facts(db)}
+        return result
 
     @router.post("/life/facts/{fact_id}/supersede")
-    def supersede_life_fact(fact_id: str, body: dict | None = None) -> dict:
-        payload = body or {}
-        replacement_id = str(payload.get("replacementFactId") or payload.get("supersededBy") or "")
-        fact = db.update_life_fact_status(
-            fact_id,
-            status="superseded",
-            supersedes_id=replacement_id,
-            metadata={"supersededAt": time.time(), "supersededBy": replacement_id},
-        )
-        if fact is None:
+    async def supersede_life_fact(fact_id: str, body: dict | None = None) -> dict:
+        result = await supersede_manual_life_fact(db, llm, fact_id, body or {})
+        if result is None:
             raise HTTPException(status_code=404, detail="fact not found")
-        return {"fact": fact, "audit": audit_life_facts(db)}
+        return result
 
     @router.post("/life/advance")
     async def advance_life(body: dict | None = None) -> dict:

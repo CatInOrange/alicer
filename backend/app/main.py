@@ -17,7 +17,8 @@ from .routers.chat import create_chat_router
 from .routers.diary import create_diary_router, run_diary_scheduler
 from .routers.life import create_life_router
 from .routers.memories import create_memories_router
-from .routers.moments import create_moments_router, generate_life_moment, run_moments_scheduler
+from .routers.moments import create_moments_router
+from .services.moment_service import generate_life_moment, run_moments_scheduler
 from .routers.proactive import create_proactive_router
 from .routers.rifts import create_rifts_router
 from .routers.settings import create_settings_router

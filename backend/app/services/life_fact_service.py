@@ -69,6 +69,7 @@ def schedule_fact_extraction(
             user_message=user_message,
             assistant_message=assistant_message,
             life_context=life_context or {},
+            reconcile=True,
         )
     )
 
@@ -81,6 +82,7 @@ async def extract_life_facts(
     user_message: dict,
     assistant_message: dict,
     life_context: dict | None = None,
+    reconcile: bool = False,
 ) -> list[dict]:
     merged = merge_settings(settings or db.get_settings())
     cleanup_life_facts(db)
@@ -159,6 +161,16 @@ async def extract_life_facts(
             continue
         _supersede_conflicts(db, normalized)
         saved.append(db.upsert_life_fact(**normalized))
+    if saved and reconcile:
+        from .consistency_service import reconcile_after_life_facts_changed
+
+        await reconcile_after_life_facts_changed(
+            db,
+            llm,
+            settings=merged,
+            facts=saved,
+            reason="life_fact_extraction",
+        )
     return saved
 
 
@@ -191,6 +203,7 @@ async def refresh_life_facts_from_recent_chat(
                 user_message=user_message,
                 assistant_message=assistant_message,
                 life_context={},
+                reconcile=True,
             )
         )
     cleanup = cleanup_life_facts(db)
@@ -224,6 +237,8 @@ def build_world_context(db: Database, settings: dict | None = None) -> dict:
             current.append(item)
         elif starts_at is None or starts_at.date() in {today, tomorrow} or starts_at <= now + dt.timedelta(days=3):
             upcoming.append(item)
+    latest_fact_updated_at = max((float(item.get("updatedAt") or 0) for item in facts), default=0.0)
+    last_reconciliation = db.get_scheduled_job("consistency:life_projection:last")
     return {
         "enabled": True,
         "activeFacts": [_public_fact(item) for item in facts[:20]],
@@ -232,6 +247,10 @@ def build_world_context(db: Database, settings: dict | None = None) -> dict:
         "stable": [_public_fact(item) for item in stable[:8]],
         "prompt": _format_world_prompt(current=current, upcoming=upcoming, stable=stable),
         "audit": audit_life_facts(db),
+        "freshness": {
+            "latestFactUpdatedAt": latest_fact_updated_at or None,
+            "lastReconciliation": last_reconciliation,
+        },
     }
 
 
@@ -584,6 +603,7 @@ def _public_fact(item: dict) -> dict:
         "expiresAt": item.get("expiresAt"),
         "confidence": item.get("confidence"),
         "importance": item.get("importance"),
+        "updatedAt": item.get("updatedAt"),
         "timeWindow": _time_window(item),
         "metadata": item.get("metadata") or {},
     }

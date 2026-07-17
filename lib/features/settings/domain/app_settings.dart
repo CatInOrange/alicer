@@ -485,6 +485,146 @@ class ChatPhotoSettings {
   }
 }
 
+class ProactiveQuietHours {
+  const ProactiveQuietHours({this.start = '23:30', this.end = '08:00'});
+
+  final String start;
+  final String end;
+
+  factory ProactiveQuietHours.fromJson(Map<String, dynamic> json) {
+    return ProactiveQuietHours(
+      start: _normalizeClock((json['start'] ?? '23:30').toString(), '23:30'),
+      end: _normalizeClock((json['end'] ?? '08:00').toString(), '08:00'),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {'start': start, 'end': end};
+
+  ProactiveQuietHours copyWith({String? start, String? end}) {
+    return ProactiveQuietHours(
+      start: _normalizeClock(start ?? this.start, this.start),
+      end: _normalizeClock(end ?? this.end, this.end),
+    );
+  }
+}
+
+class ProactiveSettings {
+  const ProactiveSettings({
+    this.enabled = true,
+    this.quietHours = const ProactiveQuietHours(),
+    this.intervalMinutes = 20,
+    this.minIdleHoursBeforeChat = 5,
+    this.minHoursBetweenChat = 3,
+    this.minHoursBetweenMoments = 8,
+    this.maxChatPerDay = 3,
+    this.maxMomentsPerDay = 2,
+    this.chatThreshold = 0.66,
+    this.momentThreshold = 0.68,
+  });
+
+  final bool enabled;
+  final ProactiveQuietHours quietHours;
+  final int intervalMinutes;
+  final int minIdleHoursBeforeChat;
+  final int minHoursBetweenChat;
+  final int minHoursBetweenMoments;
+  final int maxChatPerDay;
+  final int maxMomentsPerDay;
+  final double chatThreshold;
+  final double momentThreshold;
+
+  factory ProactiveSettings.fromJson(Map<String, dynamic> json) {
+    return ProactiveSettings(
+      enabled: json['enabled'] != false,
+      quietHours: ProactiveQuietHours.fromJson(
+        Map<String, dynamic>.from((json['quietHours'] as Map?) ?? const {}),
+      ),
+      intervalMinutes: _clampInt(json['intervalMinutes'], 20, 5, 180),
+      minIdleHoursBeforeChat: _clampInt(
+        json['minIdleHoursBeforeChat'],
+        5,
+        1,
+        72,
+      ),
+      minHoursBetweenChat: _clampInt(json['minHoursBetweenChat'], 3, 1, 24),
+      minHoursBetweenMoments: _clampInt(
+        json['minHoursBetweenMoments'],
+        8,
+        1,
+        48,
+      ),
+      maxChatPerDay: _clampInt(json['maxChatPerDay'], 3, 0, 12),
+      maxMomentsPerDay: _clampInt(json['maxMomentsPerDay'], 2, 0, 6),
+      chatThreshold: _clampDouble(json['chatThreshold'], 0.66, 0.2, 0.98),
+      momentThreshold: _clampDouble(json['momentThreshold'], 0.68, 0.2, 0.98),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'quietHours': quietHours.toJson(),
+    'intervalMinutes': intervalMinutes,
+    'minIdleHoursBeforeChat': minIdleHoursBeforeChat,
+    'minHoursBetweenChat': minHoursBetweenChat,
+    'minHoursBetweenMoments': minHoursBetweenMoments,
+    'maxChatPerDay': maxChatPerDay,
+    'maxMomentsPerDay': maxMomentsPerDay,
+    'chatThreshold': chatThreshold,
+    'momentThreshold': momentThreshold,
+  };
+
+  ProactiveSettings copyWith({
+    bool? enabled,
+    ProactiveQuietHours? quietHours,
+    int? intervalMinutes,
+    int? minIdleHoursBeforeChat,
+    int? minHoursBetweenChat,
+    int? minHoursBetweenMoments,
+    int? maxChatPerDay,
+    int? maxMomentsPerDay,
+    double? chatThreshold,
+    double? momentThreshold,
+  }) {
+    return ProactiveSettings(
+      enabled: enabled ?? this.enabled,
+      quietHours: quietHours ?? this.quietHours,
+      intervalMinutes: _clampInt(intervalMinutes, this.intervalMinutes, 5, 180),
+      minIdleHoursBeforeChat: _clampInt(
+        minIdleHoursBeforeChat,
+        this.minIdleHoursBeforeChat,
+        1,
+        72,
+      ),
+      minHoursBetweenChat: _clampInt(
+        minHoursBetweenChat,
+        this.minHoursBetweenChat,
+        1,
+        24,
+      ),
+      minHoursBetweenMoments: _clampInt(
+        minHoursBetweenMoments,
+        this.minHoursBetweenMoments,
+        1,
+        48,
+      ),
+      maxChatPerDay: _clampInt(maxChatPerDay, this.maxChatPerDay, 0, 12),
+      maxMomentsPerDay: _clampInt(
+        maxMomentsPerDay,
+        this.maxMomentsPerDay,
+        0,
+        6,
+      ),
+      chatThreshold: _clampDouble(chatThreshold, this.chatThreshold, 0.2, 0.98),
+      momentThreshold: _clampDouble(
+        momentThreshold,
+        this.momentThreshold,
+        0.2,
+        0.98,
+      ),
+    );
+  }
+}
+
 String normalizeHistoryMode(String value) {
   return switch (value) {
     'recent' || 'day' || 'month' || 'all' => value,
@@ -492,10 +632,28 @@ String normalizeHistoryMode(String value) {
   };
 }
 
+double _clampDouble(Object? value, double fallback, double min, double max) {
+  final parsed =
+      value is num
+          ? value.toDouble()
+          : double.tryParse(value?.toString() ?? '');
+  return (parsed ?? fallback).clamp(min, max);
+}
+
 int _clampInt(Object? value, int fallback, int min, int max) {
   final parsed =
       value is num ? value.toInt() : int.tryParse(value?.toString() ?? '');
   return (parsed ?? fallback).clamp(min, max);
+}
+
+String _normalizeClock(String value, String fallback) {
+  final match = RegExp(r'^(\d{1,2}):(\d{2})$').firstMatch(value.trim());
+  if (match == null) return fallback;
+  final hour = int.tryParse(match.group(1) ?? '');
+  final minute = int.tryParse(match.group(2) ?? '');
+  if (hour == null || minute == null) return fallback;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return fallback;
+  return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
 }
 
 class ModelSettings {
@@ -597,6 +755,7 @@ class AlicerSettings {
     this.life = const LifeSettings(),
     this.userTimeline = const UserTimelineSettings(),
     this.chatPhotos = const ChatPhotoSettings(),
+    this.proactive = const ProactiveSettings(),
     this.model = const ModelSettings(),
   });
 
@@ -611,6 +770,7 @@ class AlicerSettings {
   final LifeSettings life;
   final UserTimelineSettings userTimeline;
   final ChatPhotoSettings chatPhotos;
+  final ProactiveSettings proactive;
   final ModelSettings model;
 
   factory AlicerSettings.fromJson(Map<String, dynamic> json) {
@@ -649,6 +809,9 @@ class AlicerSettings {
       chatPhotos: ChatPhotoSettings.fromJson(
         Map<String, dynamic>.from((json['chatPhotos'] as Map?) ?? const {}),
       ),
+      proactive: ProactiveSettings.fromJson(
+        Map<String, dynamic>.from((json['proactive'] as Map?) ?? const {}),
+      ),
       model: ModelSettings.fromJson(
         Map<String, dynamic>.from((json['model'] as Map?) ?? const {}),
       ),
@@ -667,6 +830,7 @@ class AlicerSettings {
     'life': life.toJson(),
     'userTimeline': userTimeline.toJson(),
     'chatPhotos': chatPhotos.toJson(),
+    'proactive': proactive.toJson(),
     'model': model.toJson(),
   };
 
@@ -680,6 +844,7 @@ class AlicerSettings {
     'life': life.toJson(),
     'userTimeline': userTimeline.toJson(),
     'chatPhotos': chatPhotos.toJson(),
+    'proactive': proactive.toJson(),
     'model': model.toJson(),
   };
 
@@ -695,6 +860,7 @@ class AlicerSettings {
     LifeSettings? life,
     UserTimelineSettings? userTimeline,
     ChatPhotoSettings? chatPhotos,
+    ProactiveSettings? proactive,
     ModelSettings? model,
   }) {
     return AlicerSettings(
@@ -709,6 +875,7 @@ class AlicerSettings {
       life: life ?? this.life,
       userTimeline: userTimeline ?? this.userTimeline,
       chatPhotos: chatPhotos ?? this.chatPhotos,
+      proactive: proactive ?? this.proactive,
       model: model ?? this.model,
     );
   }

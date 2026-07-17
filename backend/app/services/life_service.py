@@ -72,6 +72,7 @@ def build_life_context(db: Database, settings: dict | None = None) -> dict:
         "state": stored.get("state") or _default_state(merged),
         "plan": stored.get("plan") or {},
         "planDate": stored.get("planDate") or "",
+        "updatedAt": stored.get("updatedAt"),
         "profileUpdatedAt": stored.get("profileUpdatedAt"),
         "recentEvents": recent,
         "factConstraints": fact_constraints,
