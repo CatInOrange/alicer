@@ -30,6 +30,7 @@ def merge_settings(stored: dict | None) -> dict:
         "life",
         "userTimeline",
         "chatPhotos",
+        "proactive",
         "model",
     ):
         merged[key] = {**DEFAULT_SETTINGS.get(key, {}), **stored.get(key, {})}

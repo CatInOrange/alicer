@@ -42,6 +42,26 @@ class Database:
                     result_json TEXT NOT NULL DEFAULT '{}'
                 );
 
+                CREATE TABLE IF NOT EXISTS proactive_events (
+                    id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    intent TEXT NOT NULL DEFAULT '',
+                    source_key TEXT NOT NULL DEFAULT '',
+                    score REAL NOT NULL DEFAULT 0,
+                    reason TEXT NOT NULL DEFAULT '',
+                    message_id TEXT NOT NULL DEFAULT '',
+                    moment_id TEXT NOT NULL DEFAULT '',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL,
+                    decided_at REAL,
+                    delivered_at REAL
+                );
+                CREATE INDEX IF NOT EXISTS idx_proactive_events_created
+                ON proactive_events(created_at DESC, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_proactive_events_type_status
+                ON proactive_events(event_type, status, created_at DESC);
+
                 CREATE TABLE IF NOT EXISTS messages (
                     id TEXT PRIMARY KEY,
                     role TEXT NOT NULL,
@@ -385,6 +405,129 @@ class Database:
                 """,
                 (job_key, time.time(), json.dumps(result, ensure_ascii=False)),
             )
+
+    def add_proactive_event(
+        self,
+        *,
+        event_id: str,
+        event_type: str,
+        status: str,
+        intent: str = "",
+        source_key: str = "",
+        score: float = 0,
+        reason: str = "",
+        message_id: str = "",
+        moment_id: str = "",
+        metadata: dict | None = None,
+        decided: bool = False,
+        delivered: bool = False,
+    ) -> dict:
+        now = time.time()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO proactive_events(
+                    id, event_type, status, intent, source_key, score, reason,
+                    message_id, moment_id, metadata_json, created_at, decided_at, delivered_at
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    event_id,
+                    event_type,
+                    status,
+                    intent,
+                    source_key,
+                    float(score),
+                    reason[:500],
+                    message_id,
+                    moment_id,
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    now,
+                    now if decided else None,
+                    now if delivered else None,
+                ),
+            )
+        return self.get_proactive_event(event_id) or {}
+
+    def get_proactive_event(self, event_id: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM proactive_events WHERE id = ?", (event_id,)).fetchone()
+        return self._proactive_event_row(row) if row is not None else None
+
+    def list_proactive_events(
+        self,
+        *,
+        limit: int = 50,
+        event_type: str | None = None,
+        since: float | None = None,
+    ) -> list[dict]:
+        clauses = []
+        params: list[object] = []
+        if event_type:
+            clauses.append("event_type = ?")
+            params.append(event_type)
+        if since is not None:
+            clauses.append("created_at >= ?")
+            params.append(float(since))
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM proactive_events
+                {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (*params, max(1, min(limit, 200))),
+            ).fetchall()
+        return [self._proactive_event_row(row) for row in rows]
+
+    def latest_proactive_event(
+        self,
+        *,
+        event_type: str | None = None,
+        status: str | None = None,
+    ) -> dict | None:
+        clauses = []
+        params: list[object] = []
+        if event_type:
+            clauses.append("event_type = ?")
+            params.append(event_type)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        with self.connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT *
+                FROM proactive_events
+                {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+        return self._proactive_event_row(row) if row is not None else None
+
+    def _proactive_event_row(self, row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "eventType": row["event_type"],
+            "status": row["status"],
+            "intent": row["intent"],
+            "sourceKey": row["source_key"],
+            "score": row["score"],
+            "reason": row["reason"],
+            "messageId": row["message_id"],
+            "momentId": row["moment_id"],
+            "metadata": json.loads(row["metadata_json"] or "{}"),
+            "createdAt": row["created_at"],
+            "decidedAt": row["decided_at"],
+            "deliveredAt": row["delivered_at"],
+        }
 
     def list_messages(self, limit: int = 80) -> list[dict]:
         with self.connect() as conn:

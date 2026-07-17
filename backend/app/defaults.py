@@ -118,6 +118,21 @@ DEFAULT_SETTINGS: dict = {
         "dailySuccessfulLimit": 1,
         "minHoursBetweenPhotos": 12,
     },
+    "proactive": {
+        "enabled": True,
+        "intervalMinutes": 20,
+        "quietHours": {
+            "start": "23:30",
+            "end": "08:00",
+        },
+        "minIdleHoursBeforeChat": 5,
+        "minHoursBetweenChat": 3,
+        "minHoursBetweenMoments": 8,
+        "maxChatPerDay": 3,
+        "maxMomentsPerDay": 2,
+        "chatThreshold": 0.66,
+        "momentThreshold": 0.68,
+    },
     "model": {
         "provider": "deepseek",
         "model": "deepseek-v4-flash",

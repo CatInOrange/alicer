@@ -120,6 +120,15 @@ async def run_moments_scheduler(db: Database, llm: LlmService) -> None:
         await _generate_scheduled_moment(db, llm, next_run.date())
 
 
+async def generate_life_moment(db: Database, llm: LlmService, settings: dict, source: str) -> dict:
+    return await _generate_moment(
+        db,
+        llm,
+        settings=settings,
+        source=source,
+    )
+
+
 async def _catch_up_daily_moment(db: Database, llm: LlmService) -> None:
     now = dt.datetime.now(TZ)
     today_target = dt.datetime.combine(now.date(), dt.time(hour=12), tzinfo=TZ)

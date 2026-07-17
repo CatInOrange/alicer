@@ -17,12 +17,14 @@ from .routers.chat import create_chat_router
 from .routers.diary import create_diary_router, run_diary_scheduler
 from .routers.life import create_life_router
 from .routers.memories import create_memories_router
-from .routers.moments import create_moments_router, run_moments_scheduler
+from .routers.moments import create_moments_router, generate_life_moment, run_moments_scheduler
+from .routers.proactive import create_proactive_router
 from .routers.rifts import create_rifts_router
 from .routers.settings import create_settings_router
 from .routers.user_timeline import create_user_timeline_router
 from .services.llm_service import LlmService
 from .services.life_service import run_life_scheduler
+from .services.proactive_service import run_proactive_scheduler
 
 
 DEEPSEEK_MODELS = [
@@ -60,6 +62,7 @@ def create_app() -> FastAPI:
     app.include_router(create_life_router(db, llm))
     app.include_router(create_user_timeline_router(db))
     app.include_router(create_moments_router(db, llm))
+    app.include_router(create_proactive_router(db, llm))
     app.include_router(create_memories_router(db, llm))
     app.include_router(create_rifts_router(db, llm))
     app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
@@ -69,10 +72,13 @@ def create_app() -> FastAPI:
         app.state.diary_task = asyncio.create_task(run_diary_scheduler(db, llm))
         app.state.life_task = asyncio.create_task(run_life_scheduler(db, llm))
         app.state.moments_task = asyncio.create_task(run_moments_scheduler(db, llm))
+        app.state.proactive_task = asyncio.create_task(
+            run_proactive_scheduler(db, llm, moment_generator=generate_life_moment)
+        )
 
     @app.on_event("shutdown")
     async def stop_background_tasks() -> None:
-        for task_name in ("diary_task", "life_task", "moments_task"):
+        for task_name in ("diary_task", "life_task", "moments_task", "proactive_task"):
             task = getattr(app.state, task_name, None)
             if task is not None:
                 task.cancel()
