@@ -138,27 +138,45 @@ async def _run_chat_photo_task(db: Database, llm: LlmService, *, settings: dict,
     if not task_id:
         return
     db.update_chat_photo_task(task_id, status="generating", mark_started=True)
+    attempts: list[dict] = []
     try:
         moments = settings.get("moments") or {}
         reference_image_url = str(moments.get("referenceImageUrl") or "").strip() or GROK_REFERENCE_IMAGE_URL
-        image = await llm.generate_image(
-            prompt=str(task.get("imagePrompt") or ""),
-            bucket="chat",
-            reference_image_url=reference_image_url,
-        )
+        prompt = str(task.get("imagePrompt") or "")
+        image: dict | None = None
+        for attempt_index, attempt_prompt in enumerate(_image_prompt_attempts(prompt, settings=settings), start=1):
+            if attempt_prompt != prompt:
+                db.update_chat_photo_task(task_id, image_prompt=attempt_prompt, metadata={"safePromptFallback": True})
+                prompt = attempt_prompt
+            try:
+                image = await llm.generate_image(
+                    prompt=attempt_prompt,
+                    bucket="chat",
+                    reference_image_url=reference_image_url,
+                )
+                attempts.append({"attempt": attempt_index, "status": "ok"})
+                break
+            except Exception as exc:  # noqa: BLE001
+                error = str(exc)[:500]
+                attempts.append({"attempt": attempt_index, "status": "failed", "error": error})
+                if not _is_content_moderation_error(error):
+                    raise
+                if attempt_index >= 2:
+                    raise
         image_url = str(image.get("imageUrl") or "")
         if not image_url:
             db.update_chat_photo_task(
                 task_id,
                 status="failed",
-                metadata={"imageProvider": image.get("provider") or {}, "error": "empty image url"},
+                metadata={"imageProvider": image.get("provider") or {}, "error": "empty image url", "attempts": attempts},
             )
+            _send_photo_failure_notice(db, task=task, reason="empty_image_url")
             return
         db.update_chat_photo_task(
             task_id,
             status="generated",
             image_url=image_url,
-            metadata={"imageProvider": image.get("provider") or {}},
+            metadata={"imageProvider": image.get("provider") or {}, "attempts": attempts},
             mark_generated=True,
         )
         message_id = f"msg_{uuid.uuid4().hex}"
@@ -185,7 +203,8 @@ async def _run_chat_photo_task(db: Database, llm: LlmService, *, settings: dict,
             metadata={"photoMessage": {"id": message.get("id"), "createdAt": message.get("createdAt")}},
         )
     except Exception as exc:  # noqa: BLE001
-        db.update_chat_photo_task(task_id, status="failed", metadata={"error": str(exc)[:500]})
+        db.update_chat_photo_task(task_id, status="failed", metadata={"error": str(exc)[:500], "attempts": attempts})
+        _send_photo_failure_notice(db, task=task, reason=str(exc)[:120])
 
 
 async def _photo_director_decision(
@@ -252,16 +271,162 @@ def _build_image_prompt(settings: dict, decision: dict, *, companion: str, user_
         "The only person in the image is {{companion.name}}. Use the reference image as the identity source. "
         "Preserve the same face, hairstyle, body type, and overall vibe. Natural candid smartphone photo, no text, no watermark."
     )
-    identity = identity.replace("{{companion.name}}", companion).replace("{{user.name}}", user_name)
-    scene = str(decision.get("scene") or "natural casual selfie").strip()
-    outfit = str(decision.get("outfit") or "natural everyday outfit").strip()
-    pose = str(decision.get("pose") or "relaxed smartphone selfie").strip()
-    mood = str(decision.get("mood") or "warm and intimate").strip()
+    identity = _sanitize_image_text(identity.replace("{{companion.name}}", companion).replace("{{user.name}}", user_name))
+    safe_decision = _safe_image_decision(decision)
+    scene = str(safe_decision.get("scene") or "natural casual selfie").strip()
+    outfit = str(safe_decision.get("outfit") or "neat everyday outfit").strip()
+    pose = str(safe_decision.get("pose") or "relaxed smartphone selfie").strip()
+    mood = str(safe_decision.get("mood") or "warm and natural").strip()
     return (
         f"{identity} "
         f"Scene: {scene}. Outfit: {outfit}. Pose: {pose}. Mood: {mood}. "
-        "The image should feel like a private chat photo she just took naturally, not a studio portrait. "
-        "Only one person, no other main characters."
+        "The image should feel like an everyday chat photo she just took naturally, not a studio portrait. "
+        "She is fully clothed in a modest, neat casual look. Only one person, no other main characters."
+    )
+
+
+def _image_prompt_attempts(prompt: str, *, settings: dict) -> list[str]:
+    first = _sanitize_image_text(prompt)
+    fallback = _safe_fallback_image_prompt(settings)
+    if first == fallback:
+        return [first]
+    return [first, fallback]
+
+
+def _safe_fallback_image_prompt(settings: dict) -> str:
+    companion = str(((settings.get("companion") or {}).get("name") or "Alice")).strip() or "Alice"
+    return (
+        f"A natural smartphone lifestyle portrait of {companion}, fully clothed in a neat casual outfit, "
+        "standing by a hotel window with warm evening light. Calm friendly mood, modest framing from head "
+        "and shoulders or half body, everyday travel record, one person, no text, no watermark."
+    )
+
+
+def _safe_image_decision(decision: dict) -> dict:
+    text = " ".join(str(decision.get(key) or "") for key in ("scene", "outfit", "pose", "mood", "caption_hint"))
+    if _contains_unsafe_image_terms(text):
+        return {
+            "scene": "hotel window with warm evening light, natural travel-life snapshot",
+            "outfit": "neat casual outfit, fully clothed",
+            "pose": "relaxed smartphone selfie with modest framing",
+            "mood": "warm, calm, and natural",
+        }
+    return {
+        "scene": _sanitize_image_text(str(decision.get("scene") or "natural casual selfie")),
+        "outfit": _sanitize_image_text(str(decision.get("outfit") or "neat everyday outfit")),
+        "pose": _sanitize_image_text(str(decision.get("pose") or "relaxed smartphone selfie")),
+        "mood": _sanitize_image_text(str(decision.get("mood") or "warm and natural")),
+    }
+
+
+UNSAFE_IMAGE_TERMS = (
+    "裸",
+    "露点",
+    "露胸",
+    "露肩",
+    "半裸",
+    "浴袍半挂",
+    "半挂",
+    "透视",
+    "丝袜",
+    "黑丝",
+    "吊带",
+    "内衣",
+    "腿线",
+    "撩人",
+    "诱惑",
+    "性感",
+    "nude",
+    "nudity",
+    "naked",
+    "bare",
+    "exposed",
+    "lingerie",
+    "stockings",
+    "pantyhose",
+    "sexy",
+    "seductive",
+)
+
+
+SAFE_IMAGE_REPLACEMENTS = {
+    "浴袍半挂": "宽松外套穿着整齐",
+    "半挂": "穿着整齐",
+    "丝袜": "深色长裤",
+    "黑丝": "深色长裤",
+    "吊带": "浅色上衣",
+    "内衣": "日常上衣",
+    "腿线": "自然站姿",
+    "撩人": "温柔自然",
+    "诱惑": "温柔自然",
+    "性感": "自然好看",
+    "裸露": "整齐穿着",
+    "露点": "整齐穿着",
+    "露胸": "整齐穿着",
+    "露肩": "整齐穿着",
+    "半裸": "整齐穿着",
+    "裸": "整齐穿着",
+    "透视": "不透明面料",
+    "lingerie": "casual outfit",
+    "stockings": "pants",
+    "pantyhose": "pants",
+    "sexy": "natural",
+    "seductive": "natural",
+    "nude": "fully clothed",
+    "nudity": "fully clothed",
+    "naked": "fully clothed",
+    "bare": "covered",
+    "exposed": "modest",
+}
+
+
+def _sanitize_image_text(value: str) -> str:
+    text = " ".join(value.split()).strip()
+    for unsafe, replacement in SAFE_IMAGE_REPLACEMENTS.items():
+        text = text.replace(unsafe, replacement)
+        text = text.replace(unsafe.capitalize(), replacement)
+    return text[:1200]
+
+
+def _contains_unsafe_image_terms(value: str) -> bool:
+    lowered = value.lower()
+    return any(term in lowered for term in UNSAFE_IMAGE_TERMS)
+
+
+def _is_content_moderation_error(error: str) -> bool:
+    lowered = error.lower()
+    return any(token in lowered for token in ("content-moderated", "moderation", "rejected by content", "content policy"))
+
+
+def _send_photo_failure_notice(db: Database, *, task: dict, reason: str) -> None:
+    task_id = str(task.get("id") or "")
+    if not task_id:
+        return
+    current = db.get_chat_photo_task(task_id) or task
+    metadata = current.get("metadata") or {}
+    if metadata.get("failureNoticeMessageId"):
+        return
+    message_id = f"msg_{uuid.uuid4().hex}"
+    source = str(task.get("source") or "requested")
+    content = (
+        "刚刚那张没生成出来，先不让你空等；我下次换个更日常的角度。"
+        if source != "proactive"
+        else "刚刚那张生活照没生成出来，我先收回这次主动分享。"
+    )
+    message = db.add_message(
+        message_id=message_id,
+        role="assistant",
+        content=content,
+        metadata={
+            "kind": "chat_photo_failure",
+            "chatPhotoTaskId": task_id,
+            "photoSource": source,
+            "reason": reason,
+        },
+    )
+    db.update_chat_photo_task(
+        task_id,
+        metadata={"failureNoticeMessageId": message.get("id"), "failureNoticeCreatedAt": message.get("createdAt")},
     )
 
 
