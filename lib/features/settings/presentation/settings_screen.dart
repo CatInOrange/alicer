@@ -182,44 +182,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             _CollapsiblePanel(
-              icon: Icons.auto_awesome_outlined,
-              title: '提示词模块',
-              subtitle: '只保留可编辑的人设风格和统一运行上下文，避免重复注入。',
-              trailing: FilledButton.icon(
-                onPressed: _showPromptPreview,
-                icon: const Icon(Icons.code_rounded, size: 18),
-                label: const Text('预览'),
-              ),
+              icon: Icons.fact_check_outlined,
+              title: '01 Fact Ledger Engine · 事实账本引擎',
+              subtitle: '消息先沉淀成硬事实、承诺和冲突；后面的上下文、生活计划和未来时间线都以它为准。',
               child: Column(
                 children: [
-                  ReorderableListView.builder(
-                    buildDefaultDragHandles: false,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _orderedPromptModules.length,
-                    onReorder: _reorderPromptModules,
-                    itemBuilder: (context, index) {
-                      final module = _orderedPromptModules[index];
-                      return _PromptModuleRow(
-                        key: ValueKey(module.id),
-                        index: index,
-                        module: module,
-                        onToggle:
-                            (value) => _updateModule(
-                              module.id,
-                              module.copyWith(enabled: value),
-                            ),
-                        onEdit: () => _editModule(module),
-                      );
-                    },
+                  _LifeFactsPanel(
+                    facts: _lifeFacts,
+                    audit: _lifeFactAudit,
+                    status: _lifeFactsStatus,
+                    isLoading: _isLoadingLifeFacts,
+                    isCleaning: _isCleaningLifeFacts,
+                    isRefreshingFacts: _isRefreshingLifeFacts,
+                    onRefresh: _loadLifeFacts,
+                    onCleanup: _cleanupLifeFacts,
+                    onRefreshFacts: _refreshLifeFactsFromChat,
+                    onCreate: _createLifeFact,
+                    onEdit: _editLifeFact,
+                    onComplete: _completeLifeFact,
+                    onCancel: _cancelLifeFact,
                   ),
                 ],
               ),
             ),
             _CollapsiblePanel(
               icon: Icons.public_rounded,
-              title: '环境感知',
-              subtitle: '时间、地点、天气直接来自手机当前信息。',
+              title: '02 Environment Engine · 环境引擎',
+              subtitle: '采集当前时间、地点和天气，提供给上下文引擎做运行态输入。',
               child: Column(
                 children: [
                   _SwitchRow(
@@ -267,97 +256,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             _CollapsiblePanel(
-              icon: Icons.memory_rounded,
-              title: '记忆与聊天上下文',
-              subtitle: '长期记忆由后端沉淀；聊天历史统一进入运行上下文。',
-              child: Column(
-                children: [
-                  _SwitchRow(
-                    icon: Icons.auto_stories_outlined,
-                    title: '长期记忆',
-                    subtitle: '稳定事实、偏好和重要回忆。',
-                    value: _settings.memory.longTerm,
-                    onChanged:
-                        (value) => _setMemory(
-                          _settings.memory.copyWith(longTerm: value),
-                        ),
-                  ),
-                  _SwitchRow(
-                    icon: Icons.auto_fix_high_outlined,
-                    title: '自动提取',
-                    subtitle: '后端异步提取候选记忆。',
-                    value: _settings.memory.autoExtract,
-                    onChanged:
-                        (value) => _setMemory(
-                          _settings.memory.copyWith(autoExtract: value),
-                        ),
-                  ),
-                  _SwitchRow(
-                    icon: Icons.fact_check_outlined,
-                    title: '写入前审核',
-                    subtitle: '候选长期记忆确认后再保存。',
-                    value: _settings.memory.reviewBeforeSave,
-                    onChanged:
-                        (value) => _setMemory(
-                          _settings.memory.copyWith(reviewBeforeSave: value),
-                        ),
-                  ),
-                  _ActionRow(
-                    icon: Icons.library_books_outlined,
-                    title: '记忆管理',
-                    subtitle: '查看、确认、编辑、归档她记住的事情。',
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (context) => const MemoryScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                  _HistoryModeRow(
-                    value: _settings.chatContext.historyMode,
-                    onChanged:
-                        (value) => _setChatContext(
-                          _settings.chatContext.copyWith(historyMode: value),
-                        ),
-                  ),
-                  _IntSliderRow(
-                    icon: Icons.format_list_numbered_outlined,
-                    title: '最近条数',
-                    subtitle:
-                        '选择“最近”模式时，运行上下文最多取 ${_settings.chatContext.recentMessages} 条消息。',
-                    value: _settings.chatContext.recentMessages,
-                    min: 10,
-                    max: 300,
-                    divisions: 29,
-                    onChanged:
-                        (value) => _setChatContext(
-                          _settings.chatContext.copyWith(recentMessages: value),
-                        ),
-                  ),
-                  _IntSliderRow(
-                    icon: Icons.history_edu_outlined,
-                    title: '上下文上限',
-                    subtitle:
-                        '统一运行上下文最多读取 ${_settings.chatContext.maxHistoryMessages} 条历史，再压缩成最近 20 条和更早摘要。',
-                    value: _settings.chatContext.maxHistoryMessages,
-                    min: 20,
-                    max: 300,
-                    divisions: 28,
-                    onChanged:
-                        (value) => _setChatContext(
-                          _settings.chatContext.copyWith(
-                            maxHistoryMessages: value,
-                          ),
-                        ),
-                  ),
-                ],
-              ),
-            ),
-            _CollapsiblePanel(
               icon: Icons.phone_android_outlined,
-              title: '我的轨迹',
-              subtitle: 'Android 后台归纳地点变化、城市变化、音乐和可打扰程度，让她更懂你。',
+              title: '03 User Timeline Engine · 用户轨迹引擎',
+              subtitle: 'Android 后台归纳地点、音乐、运动和设备状态，作为用户侧上下文输入。',
               child: Column(
                 children: [
                   _SwitchRow(
@@ -468,8 +369,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.timeline_outlined,
-              title: '生活模拟',
-              subtitle: '后台按小时推进她自己的生活轨迹，聊天和朋友圈共享同一状态。',
+              title: '04 Life Simulation Engine · 生活模拟引擎',
+              subtitle: '后台推进她自己的活动、地点、心情和日计划；聊天、朋友圈和主动行为共享同一生活状态。',
               child: Column(
                 children: [
                   _SwitchRow(
@@ -542,29 +443,136 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onAdvance: _advanceLifeOnce,
                     onRefreshPlan: _refreshLifePlan,
                   ),
-                  const SizedBox(height: 18),
-                  _LifeFactsPanel(
-                    facts: _lifeFacts,
-                    audit: _lifeFactAudit,
-                    status: _lifeFactsStatus,
-                    isLoading: _isLoadingLifeFacts,
-                    isCleaning: _isCleaningLifeFacts,
-                    isRefreshingFacts: _isRefreshingLifeFacts,
-                    onRefresh: _loadLifeFacts,
-                    onCleanup: _cleanupLifeFacts,
-                    onRefreshFacts: _refreshLifeFactsFromChat,
-                    onCreate: _createLifeFact,
-                    onEdit: _editLifeFact,
-                    onComplete: _completeLifeFact,
-                    onCancel: _cancelLifeFact,
+                ],
+              ),
+            ),
+            _CollapsiblePanel(
+              icon: Icons.memory_rounded,
+              title: '05 Context Engine · 上下文引擎',
+              subtitle: '汇总事实账本、生活状态、用户轨迹、环境、记忆和聊天历史，决定每次生成能看到什么。',
+              child: Column(
+                children: [
+                  _SwitchRow(
+                    icon: Icons.auto_stories_outlined,
+                    title: '长期记忆',
+                    subtitle: '稳定事实、偏好和重要回忆。',
+                    value: _settings.memory.longTerm,
+                    onChanged:
+                        (value) => _setMemory(
+                          _settings.memory.copyWith(longTerm: value),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.auto_fix_high_outlined,
+                    title: '自动提取',
+                    subtitle: '后端异步提取候选记忆。',
+                    value: _settings.memory.autoExtract,
+                    onChanged:
+                        (value) => _setMemory(
+                          _settings.memory.copyWith(autoExtract: value),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.fact_check_outlined,
+                    title: '写入前审核',
+                    subtitle: '候选长期记忆确认后再保存。',
+                    value: _settings.memory.reviewBeforeSave,
+                    onChanged:
+                        (value) => _setMemory(
+                          _settings.memory.copyWith(reviewBeforeSave: value),
+                        ),
+                  ),
+                  _ActionRow(
+                    icon: Icons.library_books_outlined,
+                    title: '记忆管理',
+                    subtitle: '查看、确认、编辑、归档她记住的事情。',
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (context) => const MemoryScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                  _HistoryModeRow(
+                    value: _settings.chatContext.historyMode,
+                    onChanged:
+                        (value) => _setChatContext(
+                          _settings.chatContext.copyWith(historyMode: value),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.format_list_numbered_outlined,
+                    title: '最近条数',
+                    subtitle:
+                        '选择“最近”模式时，运行上下文最多取 ${_settings.chatContext.recentMessages} 条消息。',
+                    value: _settings.chatContext.recentMessages,
+                    min: 10,
+                    max: 300,
+                    divisions: 29,
+                    onChanged:
+                        (value) => _setChatContext(
+                          _settings.chatContext.copyWith(recentMessages: value),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.history_edu_outlined,
+                    title: '上下文上限',
+                    subtitle:
+                        '统一运行上下文最多读取 ${_settings.chatContext.maxHistoryMessages} 条历史，再压缩成最近 20 条和更早摘要。',
+                    value: _settings.chatContext.maxHistoryMessages,
+                    min: 20,
+                    max: 300,
+                    divisions: 28,
+                    onChanged:
+                        (value) => _setChatContext(
+                          _settings.chatContext.copyWith(
+                            maxHistoryMessages: value,
+                          ),
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            _CollapsiblePanel(
+              icon: Icons.auto_awesome_outlined,
+              title: '06 Prompt Engine · 提示词引擎',
+              subtitle: '在 Context Engine 之后渲染人设、风格和运行上下文模板；不负责自行判断事实。',
+              trailing: FilledButton.icon(
+                onPressed: _showPromptPreview,
+                icon: const Icon(Icons.code_rounded, size: 18),
+                label: const Text('预览'),
+              ),
+              child: Column(
+                children: [
+                  ReorderableListView.builder(
+                    buildDefaultDragHandles: false,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: _orderedPromptModules.length,
+                    onReorder: _reorderPromptModules,
+                    itemBuilder: (context, index) {
+                      final module = _orderedPromptModules[index];
+                      return _PromptModuleRow(
+                        key: ValueKey(module.id),
+                        index: index,
+                        module: module,
+                        onToggle:
+                            (value) => _updateModule(
+                              module.id,
+                              module.copyWith(enabled: value),
+                            ),
+                        onEdit: () => _editModule(module),
+                      );
+                    },
                   ),
                 ],
               ),
             ),
             _CollapsiblePanel(
               icon: Icons.volunteer_activism_outlined,
-              title: '主动引擎',
-              subtitle: '决定她什么时候主动聊天或发布朋友圈，默认多数时候选择沉默。',
+              title: '07 Proactive Engine · 主动引擎',
+              subtitle: '基于生活模拟、事实账本和用户轨迹打分，决定是否主动聊天或发布朋友圈。',
               child: Column(
                 children: [
                   _SwitchRow(
@@ -699,8 +707,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.photo_camera_back_outlined,
-              title: '照片生成',
-              subtitle: '聊天里请求自拍、主动生活照和每日额度。',
+              title: '08 Chat Photo Engine · 聊天照片引擎',
+              subtitle: '处理聊天里的照片请求、主动生活照和每日生成额度。',
               child: Column(
                 children: [
                   _SwitchRow(
@@ -770,8 +778,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.photo_camera_back_outlined,
-              title: '朋友圈生成',
-              subtitle: 'Moment Engine 的发布概率、照片概率和身份参考。',
+              title: '09 Moment Engine · 朋友圈引擎',
+              subtitle: '生成朋友圈正文、评论回复和配图；主动发布由 Proactive Engine 触发。',
               child: Column(
                 children: [
                   _SliderRow(
@@ -827,8 +835,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.hub_outlined,
-              title: '后端与模型',
-              subtitle: 'Alicer 后端、DeepSeek 模型和生成参数。',
+              title: '10 Runtime & Model · 运行时与模型',
+              subtitle: 'Alicer 后端地址、管理口令、DeepSeek 模型和生成参数。',
               child: Column(
                 children: [
                   TextField(
