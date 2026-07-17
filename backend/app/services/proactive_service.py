@@ -230,6 +230,8 @@ def _follow_up_candidate(
             continue
         for intent, keywords in keyword_groups:
             if any(word in content for word in keywords):
+                if intent == "follow_up" and not _looks_like_user_schedule(content):
+                    continue
                 score = 0.74 if intent == "support" else 0.68
                 if 2 <= age_hours <= 8:
                     score += 0.08
@@ -246,6 +248,15 @@ def _follow_up_candidate(
                     metadata={"sourceMessage": item, "ageHours": age_hours},
                 )
     return None
+
+
+def _looks_like_user_schedule(content: str) -> bool:
+    text = content.strip()
+    if "你" in text and "我" not in text:
+        return False
+    first_person_markers = ("我", "俺", "这边", "这会", "等会", "一会", "待会", "今天", "下午", "今晚", "明天", "早上", "中午", "晚上")
+    action_markers = ("要去", "准备去", "得去", "要开", "要飞", "赶", "出门", "加班", "考试", "面试", "开会", "航班")
+    return any(marker in text for marker in first_person_markers) and any(marker in text for marker in action_markers)
 
 
 def _life_share_candidate(

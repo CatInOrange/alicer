@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from app.db import Database
-from app.services.proactive_service import TZ, run_proactive_once
+from app.services.proactive_service import TZ, _build_candidates, run_proactive_once
 
 
 class FakeLlm:
@@ -80,6 +80,28 @@ class ProactiveServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(messages), 1)
         events = self.db.list_proactive_events(limit=10)
         self.assertEqual(events[0]["status"], "skipped")
+
+    def test_question_about_companion_is_not_follow_up_candidate(self) -> None:
+        message = {
+            "id": "msg_question",
+            "role": "user",
+            "content": "哈哈哈，穿好丝袜出门了？",
+            "createdAt": dt.datetime.now(TZ).timestamp() - 2 * 3600,
+            "metadata": {},
+        }
+
+        candidates = _build_candidates(
+            settings=self._settings({"minIdleHoursBeforeChat": 10}),
+            now=dt.datetime.now(TZ),
+            recent_messages=[message],
+            recent_moments=[],
+            recent_proactive=[],
+            life_context={"state": {}},
+            user_context={},
+            allow_moments=False,
+        )
+
+        self.assertFalse([item for item in candidates if item.intent == "follow_up"])
 
     def _settings(self, proactive_overrides: dict | None = None) -> dict:
         proactive = {
