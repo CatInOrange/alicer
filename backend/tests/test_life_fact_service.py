@@ -7,7 +7,13 @@ import unittest
 from pathlib import Path
 
 from app.db import Database
-from app.services.life_fact_service import TZ, cleanup_life_facts, extract_life_facts, resolve_life_constraints_for_day
+from app.services.life_fact_service import (
+    TZ,
+    cleanup_life_facts,
+    extract_life_facts,
+    reflect_life_fact_retention,
+    resolve_life_constraints_for_day,
+)
 from app.services.life_service import _effective_profile, _fallback_plan, _normalize_plan
 
 
@@ -178,6 +184,60 @@ class LifeFactServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["completed"], 1)
         self.assertEqual(self.db.get_life_fact("fact_flight_done")["status"], "completed")
+
+    def test_retention_promotes_old_valuable_fact_to_memory(self) -> None:
+        end = dt.datetime(2026, 7, 15, 20, 0, tzinfo=TZ).timestamp()
+        self.db.upsert_life_fact(
+            fact_id="fact_relationship_rule",
+            fact_type="relationship_commitment",
+            status="completed",
+            title="以后记住纪念日要提前准备",
+            summary="苏晚秋答应以后记住纪念日，并提前准备一点仪式感。",
+            ends_at=end,
+            confidence=0.9,
+            importance=0.82,
+            source="chat",
+        )
+
+        result = reflect_life_fact_retention(
+            self.db,
+            now=dt.datetime(2026, 7, 18, 21, 0, tzinfo=TZ).timestamp(),
+            force=True,
+        )
+
+        fact = self.db.get_life_fact("fact_relationship_rule")
+        memory = self.db.get_memory("mem_life_fact_fact_relationship_rule")
+        self.assertEqual(result["memoriesCreated"], 1)
+        self.assertEqual(fact["metadata"]["retentionDisposition"], "promoted_to_memory")
+        self.assertIsNotNone(memory)
+        self.assertEqual(memory["kind"], "relationship")
+        self.assertIn("纪念日", memory["content"])
+
+    def test_retention_archives_old_low_value_fact(self) -> None:
+        end = dt.datetime(2026, 7, 15, 10, 0, tzinfo=TZ).timestamp()
+        self.db.upsert_life_fact(
+            fact_id="fact_old_errand",
+            fact_type="schedule_commitment",
+            status="completed",
+            title="去楼下买水",
+            summary="苏晚秋去楼下便利店买水。",
+            ends_at=end,
+            confidence=0.74,
+            importance=0.3,
+            source="chat",
+        )
+
+        result = reflect_life_fact_retention(
+            self.db,
+            now=dt.datetime(2026, 7, 18, 21, 0, tzinfo=TZ).timestamp(),
+            force=True,
+        )
+
+        fact = self.db.get_life_fact("fact_old_errand")
+        self.assertEqual(result["archivedLowValue"], 1)
+        self.assertEqual(fact["status"], "archived")
+        self.assertEqual(fact["metadata"]["retentionDisposition"], "archived_low_value")
+        self.assertIsNone(self.db.get_memory("mem_life_fact_fact_old_errand"))
 
     def test_resolve_constraints_turns_flight_into_hard_blocks_and_conflicts(self) -> None:
         day = dt.date(2026, 7, 17)

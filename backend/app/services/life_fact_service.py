@@ -15,6 +15,10 @@ TZ = ZoneInfo("Asia/Shanghai")
 USER_DAY_BOUNDARY_HOUR = 4
 ACTIVE_STATUSES = ("candidate", "planned", "active")
 VISIBLE_STATUSES = ("candidate", "planned", "active", "completed", "cancelled", "superseded", "expired", "archived")
+RETENTION_STATUSES = ("completed", "cancelled", "superseded", "expired", "archived")
+RETENTION_AGE_SECONDS = 48 * 3600
+RETENTION_JOB_KEY = "life_facts:retention:last"
+RETENTION_JOB_INTERVAL_SECONDS = 20 * 3600
 FACT_TYPES = {
     "schedule_commitment",
     "relationship_commitment",
@@ -39,6 +43,26 @@ HARD_SCHEDULE_KEYWORDS = (
 )
 CONDITIONAL_KEYWORDS = ("如果", "若", "假如", "要是", "否则", "没出现", "来接", "接机")
 AVIATION_KEYWORDS = ("航班", "执飞", "机场", "机组", "空乘", "空姐", "值机", "落地", "登机", "备勤")
+LONG_TERM_FACT_KEYWORDS = (
+    "记住",
+    "别忘",
+    "以后",
+    "喜欢",
+    "不喜欢",
+    "讨厌",
+    "偏好",
+    "习惯",
+    "生日",
+    "纪念日",
+    "长期",
+    "固定",
+    "家",
+    "工作",
+    "职业",
+    "排班",
+    "住",
+    "称呼",
+)
 VALUE_SIGNALS = re.compile(
     r"(明天|后天|今晚|今天|下周|周末|早上|中午|下午|晚上|凌晨|[0-2]?\d[:：点])"
     r"|航班|机场|出差|上班|加班|下班|请假|休假|约会|见朋友|回家|搬家|旅行|拍照|自拍|照片|记住|别忘|答应|说好",
@@ -351,13 +375,158 @@ def cleanup_life_facts(db: Database, *, now: float | None = None) -> dict:
             archived += 1
     expired = db.expire_life_facts(now=value)
     superseded = _dedupe_life_facts(db, now=value)
+    retention = reflect_life_fact_retention(db, now=value)
     return {
         "expired": expired,
         "activated": activated,
         "completed": completed,
         "archived": archived,
         "supersededDuplicates": superseded,
+        "retention": retention,
     }
+
+
+def reflect_life_fact_retention(db: Database, *, now: float | None = None, force: bool = False) -> dict:
+    value = now or dt.datetime.now(TZ).timestamp()
+    last = db.get_scheduled_job(RETENTION_JOB_KEY)
+    if not force and last and value - float(last.get("ranAt") or 0) < RETENTION_JOB_INTERVAL_SECONDS:
+        return {"processed": False, "reason": "not_due"}
+
+    reviewed = 0
+    archived = 0
+    memories_created = 0
+    skipped_recent = 0
+    for fact in db.list_life_facts(statuses=RETENTION_STATUSES, limit=160, include_expired=True):
+        metadata = dict(fact.get("metadata") or {})
+        if metadata.get("retentionReviewedAt"):
+            continue
+        if not _fact_old_enough_for_retention(fact, now=value):
+            skipped_recent += 1
+            continue
+
+        reviewed += 1
+        if _should_promote_fact_to_memory(fact):
+            memory = _memory_from_life_fact(fact, now=value)
+            db.upsert_memory(**memory)
+            memories_created += 1
+            db.update_life_fact_status(
+                str(fact["id"]),
+                status=str(fact.get("status") or "archived"),
+                metadata={
+                    "retentionReviewedAt": value,
+                    "retentionDisposition": "promoted_to_memory",
+                    "retentionMemoryId": memory["memory_id"],
+                },
+            )
+        else:
+            db.update_life_fact_status(
+                str(fact["id"]),
+                status="archived",
+                metadata={
+                    "retentionReviewedAt": value,
+                    "retentionDisposition": "archived_low_value",
+                },
+            )
+            archived += 1
+
+    result = {
+        "processed": True,
+        "reviewed": reviewed,
+        "memoriesCreated": memories_created,
+        "archivedLowValue": archived,
+        "skippedRecent": skipped_recent,
+    }
+    db.upsert_scheduled_job(job_key=RETENTION_JOB_KEY, result=result)
+    return result
+
+
+def _fact_old_enough_for_retention(fact: dict, *, now: float) -> bool:
+    metadata = fact.get("metadata") or {}
+    ended_at = metadata.get("endedAt")
+    lifecycle_candidates = [
+        _float_or_none(fact.get("endsAt")),
+        _float_or_none(fact.get("expiresAt")),
+        _float_or_none(ended_at),
+    ]
+    reference = max((item for item in lifecycle_candidates if item is not None), default=None)
+    if reference is None:
+        reference = _float_or_none(fact.get("updatedAt"))
+    if reference is None:
+        return False
+    return now - reference >= RETENTION_AGE_SECONDS
+
+
+def _should_promote_fact_to_memory(fact: dict) -> bool:
+    fact_type = str(fact.get("type") or "")
+    text = f"{fact.get('title') or ''} {fact.get('summary') or ''}"
+    importance = float(fact.get("importance") or 0)
+    confidence = float(fact.get("confidence") or 0)
+    if fact_type == "profile_fact" and confidence >= 0.72:
+        return True
+    if importance >= 0.86 and confidence >= 0.68:
+        return True
+    if fact_type == "relationship_commitment" and importance >= 0.72 and _contains_long_term_signal(text):
+        return True
+    if fact_type == "current_state" and importance >= 0.78 and _contains_long_term_signal(text):
+        return True
+    return False
+
+
+def _memory_from_life_fact(fact: dict, *, now: float) -> dict:
+    fact_id = str(fact.get("id") or uuid_like())
+    fact_type = str(fact.get("type") or "")
+    title = str(fact.get("title") or "").strip()
+    summary = str(fact.get("summary") or title).strip()
+    content = summary or title
+    if title and summary and title not in summary:
+        content = f"{title}：{summary}"
+    kind = "self_life" if fact_type in {"profile_fact", "schedule_commitment", "current_state", "life_event_hint"} else "relationship"
+    subject = "companion" if kind == "self_life" else "relationship"
+    return {
+        "memory_id": f"mem_life_fact_{fact_id}",
+        "kind": kind,
+        "subject": subject,
+        "content": content[:500],
+        "summary": (title or summary)[:160],
+        "tags": ["事实账本", _memory_tag_for_fact_type(fact_type)],
+        "confidence": max(0.5, min(1.0, float(fact.get("confidence") or 0.7))),
+        "importance": max(0.5, min(1.0, float(fact.get("importance") or 0.5))),
+        "status": "active",
+        "enabled": True,
+        "pinned": fact_type == "profile_fact",
+        "sensitive": False,
+        "source": {
+            "type": "life_fact_retention",
+            "factId": fact_id,
+            "factType": fact_type,
+            "createdAt": dt.datetime.fromtimestamp(now, tz=TZ).isoformat(),
+        },
+        "expires_at": None,
+    }
+
+
+def _memory_tag_for_fact_type(fact_type: str) -> str:
+    return {
+        "schedule_commitment": "重要安排",
+        "relationship_commitment": "关系承诺",
+        "current_state": "状态沉淀",
+        "profile_fact": "稳定设定",
+        "life_event_hint": "生活线索",
+        "moment_posted": "朋友圈",
+    }.get(fact_type, "生活事实")
+
+
+def _contains_long_term_signal(text: str) -> bool:
+    return any(keyword in text for keyword in LONG_TERM_FACT_KEYWORDS)
+
+
+def _float_or_none(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def audit_life_facts(db: Database) -> dict:
