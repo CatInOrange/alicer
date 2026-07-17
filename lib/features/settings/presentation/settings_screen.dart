@@ -135,9 +135,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 14),
             _CollapsiblePanel(
               icon: Icons.face_retouching_natural_outlined,
-              title: '伴侣与头像',
-              subtitle: '名称、双方头像和本地头像缓存。',
-              initiallyExpanded: true,
+              title: '称呼与头像',
+              subtitle: '她怎么称呼你、双方头像和本地头像缓存。',
               child: Column(
                 children: [
                   Row(
@@ -186,7 +185,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: Icons.auto_awesome_outlined,
               title: '提示词模块',
               subtitle: '只保留可编辑的人设风格和统一运行上下文，避免重复注入。',
-              initiallyExpanded: true,
               trailing: FilledButton.icon(
                 onPressed: _showPromptPreview,
                 icon: const Icon(Icons.code_rounded, size: 18),
@@ -2688,7 +2686,6 @@ class _CollapsiblePanel extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.child,
-    this.initiallyExpanded = false,
     this.trailing,
   });
 
@@ -2696,7 +2693,6 @@ class _CollapsiblePanel extends StatelessWidget {
   final String title;
   final String subtitle;
   final Widget child;
-  final bool initiallyExpanded;
   final Widget? trailing;
 
   @override
@@ -2711,7 +2707,6 @@ class _CollapsiblePanel extends StatelessWidget {
           border: Border.all(color: colors.border),
         ),
         child: ExpansionTile(
-          initiallyExpanded: initiallyExpanded,
           leading: Icon(icon),
           title: Text(title, style: Theme.of(context).textTheme.titleMedium),
           subtitle: Text(

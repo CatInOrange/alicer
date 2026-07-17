@@ -10,6 +10,7 @@ import '../../settings/data/settings_store.dart';
 import '../../settings/domain/app_settings.dart';
 import '../data/moment_cache_store.dart';
 import '../data/moment_image_cache_store.dart';
+import '../data/moment_unread_tracker.dart';
 import '../data/time_repository.dart';
 import '../domain/time_models.dart';
 
@@ -187,6 +188,7 @@ class _MomentsFeedState extends State<MomentsFeed> {
         _loading = false;
         _error = null;
       });
+      unawaited(MomentUnreadTracker.instance.markSeen(cached));
       if (await _cacheStore.isFresh()) return;
     }
     await _refreshFromServer(showLoading: cached.isEmpty);
@@ -208,6 +210,7 @@ class _MomentsFeedState extends State<MomentsFeed> {
         _error = null;
       });
       await _cacheStore.saveMoments(moments);
+      await MomentUnreadTracker.instance.markSeen(moments);
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -222,6 +225,7 @@ class _MomentsFeedState extends State<MomentsFeed> {
     try {
       await _repo.generateMoment();
       await _refreshFromServer();
+      await MomentUnreadTracker.instance.markSeen(_moments);
     } catch (error) {
       if (!mounted) return;
       setState(() {

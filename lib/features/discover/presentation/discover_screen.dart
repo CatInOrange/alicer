@@ -1,15 +1,41 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../app/theme.dart';
 import '../../rifts/presentation/rift_list_screen.dart';
+import '../../time/data/moment_unread_tracker.dart';
 import '../../time/presentation/time_screen.dart';
 
-class DiscoverScreen extends StatelessWidget {
+class DiscoverScreen extends StatefulWidget {
   const DiscoverScreen({super.key});
+
+  @override
+  State<DiscoverScreen> createState() => _DiscoverScreenState();
+}
+
+class _DiscoverScreenState extends State<DiscoverScreen> {
+  @override
+  void initState() {
+    super.initState();
+    MomentUnreadTracker.instance.addListener(_onUnreadChanged);
+    Future<void>.microtask(MomentUnreadTracker.instance.refresh);
+  }
+
+  @override
+  void dispose() {
+    MomentUnreadTracker.instance.removeListener(_onUnreadChanged);
+    super.dispose();
+  }
+
+  void _onUnreadChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
     final colors = context.alicerColors;
+    final hasUnreadMoments = MomentUnreadTracker.instance.hasUnread;
     return Scaffold(
       appBar: AppBar(title: const Text('发现')),
       body: ListView(
@@ -20,12 +46,10 @@ class DiscoverScreen extends StatelessWidget {
               _DiscoverTile(
                 icon: Icons.photo_camera_back_outlined,
                 label: '朋友圈',
-                onTap:
-                    () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (context) => const MomentsScreen(),
-                      ),
-                    ),
+                showBadge: hasUnreadMoments,
+                onTap: () {
+                  unawaited(_openMoments(context));
+                },
               ),
             ],
           ),
@@ -66,6 +90,14 @@ class DiscoverScreen extends StatelessWidget {
       ),
     );
   }
+
+  Future<void> _openMoments(BuildContext context) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (context) => const MomentsScreen()),
+    );
+    if (!context.mounted) return;
+    await MomentUnreadTracker.instance.refresh();
+  }
 }
 
 class _DiscoverGroup extends StatelessWidget {
@@ -93,12 +125,14 @@ class _DiscoverTile extends StatelessWidget {
     required this.icon,
     required this.label,
     this.subtitle = '',
+    this.showBadge = false,
     required this.onTap,
   });
 
   final IconData icon;
   final String label;
   final String subtitle;
+  final bool showBadge;
   final VoidCallback onTap;
 
   @override
@@ -113,14 +147,37 @@ class _DiscoverTile extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(18, 14, 16, 14),
           child: Row(
             children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(icon, color: theme.colorScheme.primary, size: 21),
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      icon,
+                      color: theme.colorScheme.primary,
+                      size: 21,
+                    ),
+                  ),
+                  if (showBadge)
+                    Positioned(
+                      right: -2,
+                      top: -2,
+                      child: Container(
+                        width: 9,
+                        height: 9,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.error,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: colors.surface, width: 1.5),
+                        ),
+                      ),
+                    ),
+                ],
               ),
               const SizedBox(width: 14),
               Expanded(

@@ -6,10 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../../app/theme.dart';
-import '../../../core/network/api_client.dart';
 import '../../environment/application/environment_service.dart';
 import '../../settings/data/settings_store.dart';
 import '../../settings/domain/app_settings.dart';
+import '../../time/data/moment_image_cache_store.dart';
 import '../data/chat_cache_store.dart';
 import '../data/chat_repository.dart';
 import '../domain/chat_models.dart';
@@ -31,9 +31,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   List<ChatMessage> _messages = const <ChatMessage>[];
   bool _isLoading = true;
   bool _isSending = false;
+  bool _isOnline = false;
   bool _refreshingFromServer = false;
-  String _statusText = '正在整理今天的心情';
-  String? _error;
 
   @override
   void initState() {
@@ -83,8 +82,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       setState(() {
         _messages = remote;
         _isSending = hasStreaming;
-        _statusText = _isSending ? '正在回复' : '刚刚同步';
-        _error = null;
+        _isOnline = true;
       });
       await _cacheStore.saveMessages(remote);
       if (_isNearBottom()) _scrollToBottom(animated: false);
@@ -93,7 +91,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       }
     } catch (error) {
       if (!mounted) return;
-      setState(() => _error = '后端暂时连不上，正在使用本地缓存');
+      setState(() {
+        _isOnline = false;
+      });
     } finally {
       _refreshingFromServer = false;
     }
@@ -144,9 +144,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
     setState(() {
       _isSending = true;
-      _statusText = '正在回复';
+      _isOnline = true;
       _messages = [..._messages, userMessage, pending];
-      _error = null;
     });
     _scrollToBottom(animated: false);
     await _cacheStore.saveMessages(_messages, markSynced: false);
@@ -207,7 +206,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       setState(() {
         _messages = next;
         _isSending = false;
-        _statusText = '刚刚在线';
+        _isOnline = true;
       });
       await _cacheStore.saveMessages(next);
       _scrollToBottom(animated: true);
@@ -215,7 +214,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     } catch (error) {
       if (!mounted) return;
       final failed = pending.copyWith(
-        content: '刚刚没连上后端。你说的话我已经先存在本地了，等网络恢复再继续。',
+        content: '消息我先放在这里。等她回到线上的时候，我们再继续。',
         isPending: false,
         isError: true,
       );
@@ -226,8 +225,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       setState(() {
         _messages = next;
         _isSending = false;
-        _statusText = '本地缓存中';
-        _error = error.toString();
+        _isOnline = false;
       });
       await _cacheStore.saveMessages(next, markSynced: false);
       _scrollToBottom(animated: true);
@@ -286,15 +284,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(companion.name),
-                  const SizedBox(height: 2),
-                  Text(
-                    _statusText,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    overflow: TextOverflow.ellipsis,
+                  Row(
+                    children: [
+                      Flexible(child: Text(companion.name)),
+                      const SizedBox(width: 7),
+                      _PresenceDot(online: _isOnline),
+                    ],
                   ),
                 ],
               ),
@@ -325,10 +320,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         child: SafeArea(
           child: Column(
             children: [
-              if (_error != null)
-                _OfflineBanner(
-                  text: _error!.contains('本地缓存') ? _error! : '网络不稳定，消息已缓存在本机',
-                ),
               Expanded(
                 child:
                     _isLoading
@@ -527,7 +518,10 @@ class _ChatPhotoState extends State<_ChatPhoto> {
   }
 
   Future<Uint8List> _load() {
-    return ApiClient(baseUrl: widget.apiBaseUrl).getBytes(widget.imageUrl);
+    return MomentImageCacheStore.instance.loadImage(
+      apiBaseUrl: widget.apiBaseUrl,
+      imageUrl: widget.imageUrl,
+    );
   }
 
   @override
@@ -849,21 +843,29 @@ class _Avatar extends StatelessWidget {
   }
 }
 
-class _OfflineBanner extends StatelessWidget {
-  const _OfflineBanner({required this.text});
+class _PresenceDot extends StatelessWidget {
+  const _PresenceDot({required this.online});
 
-  final String text;
+  final bool online;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: Theme.of(context).colorScheme.secondaryContainer,
-      child: Text(
-        text,
-        style: TextStyle(
-          color: Theme.of(context).colorScheme.onSecondaryContainer,
+    final color = online ? const Color(0xFF31C66B) : const Color(0xFFE0B12A);
+    return Tooltip(
+      message: online ? '在线' : '离线',
+      child: Container(
+        width: 9,
+        height: 9,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: 0.34),
+              blurRadius: 8,
+              spreadRadius: 1,
+            ),
+          ],
         ),
       ),
     );

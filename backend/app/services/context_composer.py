@@ -279,7 +279,7 @@ def _format_chat_photo_context(photo_context: dict) -> str:
     allow_proactive = photo_context.get("allowProactive") is True
     lines.append(f"- 今日聊天照片额度：已成功发送 {sent_today}/{limit}，剩余额度 {remaining}。")
     lines.append(f"- 用户明确要照片：{'允许' if allow_requested and remaining > 0 else '当前不允许或额度不足'}。")
-    lines.append(f"- 伴侣主动发照片：{'允许但必须非常克制' if allow_proactive and remaining > 0 else '当前不允许'}。")
+    lines.append(f"- 伴侣主动发照片：{'允许，按当下氛围自然发送' if allow_proactive and remaining > 0 else '当前不允许'}。")
     if photo_context.get("minHoursBetweenPhotos"):
         lines.append(f"- 两次成功发送至少间隔 {photo_context['minHoursBetweenPhotos']} 小时。")
     active = photo_context.get("activeTask") or {}
