@@ -204,6 +204,7 @@ class LifeFactServiceTest(unittest.IsolatedAsyncioTestCase):
         text = json.dumps(plan["plannedEvents"], ensure_ascii=False)
         self.assertIn("北京至大连航班", text)
         self.assertIn("前往机场", text)
+        self.assertIn('"certainty": "hard"', text)
         self.assertNotIn("去温泉镇送咖啡", text)
 
     def test_effective_profile_and_routine_keep_flight_jobs_and_rest_days_coherent(self) -> None:

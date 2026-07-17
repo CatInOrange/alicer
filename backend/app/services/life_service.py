@@ -392,6 +392,8 @@ def _normalize_plan(plan: dict, *, profile: dict, slot: dt.datetime, source: str
                 "activity": str(item.get("activity") or "普通日常").strip()[:80],
                 "location": location,
                 "intent": str(item.get("intent") or "").strip()[:160],
+                "certainty": _normalize_plan_certainty(item.get("certainty"), default="planned"),
+                "source": str(item.get("source") or source or "plan").strip()[:40],
             }
         )
     events = _apply_hard_blocks(events, life_constraints=life_constraints)
@@ -412,6 +414,7 @@ def _normalize_plan(plan: dict, *, profile: dict, slot: dt.datetime, source: str
         ][:6]
         + [str(item.get("message") or "")[:120] for item in (life_constraints.get("conflicts") or [])[:4] if item.get("message")],
         "source": source,
+        "generatedAt": dt.datetime.now(TZ).isoformat(),
         "hardBlocks": life_constraints.get("hardBlocks") or [],
         "routine": profile.get("routine") or {},
     }
@@ -434,8 +437,18 @@ def _fallback_plan(*, profile: dict, slot: dt.datetime, recent_events: list[dict
         "possibleSurprises": ["兼职或副业安排", "朋友发来消息", "路上遇到天气变化", "给自己买点小东西"],
         "constraints": ["不改写职业、住处、长期习惯", "硬事实优先于节律和偏好", "调休或周末可安排兼职/副业，但不能覆盖已确定日程"],
         "source": "fallback",
+        "generatedAt": dt.datetime.now(TZ).isoformat(),
         "routine": routine,
     }
+
+
+def _normalize_plan_certainty(value: object, *, default: str) -> str:
+    text = str(value or default or "planned").strip().lower()
+    if text in {"hard", "planned", "routine", "tentative"}:
+        return text
+    if text in {"soft", "maybe", "possible", "candidate"}:
+        return "tentative"
+    return default
 
 
 def _derive_profile_from_memories(db: Database, settings: dict) -> tuple[dict, list[str]]:
@@ -835,27 +848,27 @@ def _routine_day_theme(routine: dict, slot: dt.datetime, calendar: dict) -> str:
 def _routine_events(*, profile: dict, routine: dict, calendar: dict, slot: dt.datetime, home: str, work_place: str) -> list[dict]:
     if _routine_is_rest_day(routine, slot, calendar):
         return [
-            {"timeRange": "08:30-10:00", "activity": "自然醒和慢慢整理", "location": home, "intent": "调休/周末以恢复状态为主"},
-            {"timeRange": "10:00-12:00", "activity": "个人事务或轻量副业", "location": home, "intent": "休息日可安排兼职/副业，但不压过硬事实"},
-            {"timeRange": "12:00-14:00", "activity": "午饭和休息", "location": home, "intent": "补充体力"},
-            {"timeRange": "14:00-17:30", "activity": "外出散步、见朋友或继续兼职", "location": "附近街区", "intent": "保持生活感和弹性安排"},
-            {"timeRange": "18:00-22:30", "activity": "晚间放松", "location": home, "intent": "收束一天"},
+            {"timeRange": "08:30-10:00", "activity": "自然醒和慢慢整理", "location": home, "intent": "调休/周末以恢复状态为主", "certainty": "routine", "source": "routine"},
+            {"timeRange": "10:00-12:00", "activity": "个人事务或轻量副业", "location": home, "intent": "休息日可安排兼职/副业，但不压过硬事实", "certainty": "routine", "source": "routine"},
+            {"timeRange": "12:00-14:00", "activity": "午饭和休息", "location": home, "intent": "补充体力", "certainty": "routine", "source": "routine"},
+            {"timeRange": "14:00-17:30", "activity": "外出散步、见朋友或继续兼职", "location": "附近街区", "intent": "保持生活感和弹性安排", "certainty": "routine", "source": "routine"},
+            {"timeRange": "18:00-22:30", "activity": "晚间放松", "location": home, "intent": "收束一天", "certainty": "routine", "source": "routine"},
         ]
     routine_type = str(routine.get("type") or "")
     if routine_type == "roster":
         return [
-            {"timeRange": "08:00-09:30", "activity": "起床整理并查看排班", "location": home, "intent": "确认当天是否执飞、备勤或培训"},
-            {"timeRange": "09:30-12:00", "activity": "备勤/培训准备或整理飞行用品", "location": "家/机场", "intent": "空乘排班制下的常规准备"},
-            {"timeRange": "12:00-14:00", "activity": "午饭和短暂休息", "location": home, "intent": "保持体力"},
-            {"timeRange": "14:00-17:30", "activity": "备勤、培训、个人安排或兼职", "location": "家/机场/附近街区", "intent": "没有明确航班时不强行执飞"},
-            {"timeRange": "18:00-22:30", "activity": "晚间恢复和个人生活", "location": home, "intent": "给排班制工作留恢复空间"},
+            {"timeRange": "08:00-09:30", "activity": "起床整理并查看排班", "location": home, "intent": "确认当天是否执飞、备勤或培训", "certainty": "routine", "source": "routine"},
+            {"timeRange": "09:30-12:00", "activity": "备勤/培训准备或整理飞行用品", "location": "家/机场", "intent": "空乘排班制下的常规准备", "certainty": "routine", "source": "routine"},
+            {"timeRange": "12:00-14:00", "activity": "午饭和短暂休息", "location": home, "intent": "保持体力", "certainty": "routine", "source": "routine"},
+            {"timeRange": "14:00-17:30", "activity": "备勤、培训、个人安排或兼职", "location": "家/机场/附近街区", "intent": "没有明确航班时不强行执飞", "certainty": "routine", "source": "routine"},
+            {"timeRange": "18:00-22:30", "activity": "晚间恢复和个人生活", "location": home, "intent": "给排班制工作留恢复空间", "certainty": "routine", "source": "routine"},
         ]
     return [
-        {"timeRange": "07:30-09:00", "activity": "起床整理", "location": home, "intent": "进入白天节奏"},
-        {"timeRange": "09:00-12:00", "activity": "处理主要事务", "location": work_place, "intent": "推进工作或学习"},
-        {"timeRange": "12:00-14:00", "activity": "午饭和短暂休息", "location": work_place, "intent": "恢复精力"},
-        {"timeRange": "14:00-18:00", "activity": "继续处理事务", "location": work_place, "intent": "收束白天任务"},
-        {"timeRange": "18:00-22:30", "activity": "回到个人生活", "location": home, "intent": "放松和整理心情"},
+        {"timeRange": "07:30-09:00", "activity": "起床整理", "location": home, "intent": "进入白天节奏", "certainty": "routine", "source": "routine"},
+        {"timeRange": "09:00-12:00", "activity": "处理主要事务", "location": work_place, "intent": "推进工作或学习", "certainty": "routine", "source": "routine"},
+        {"timeRange": "12:00-14:00", "activity": "午饭和短暂休息", "location": work_place, "intent": "恢复精力", "certainty": "routine", "source": "routine"},
+        {"timeRange": "14:00-18:00", "activity": "继续处理事务", "location": work_place, "intent": "收束白天任务", "certainty": "routine", "source": "routine"},
+        {"timeRange": "18:00-22:30", "activity": "回到个人生活", "location": home, "intent": "放松和整理心情", "certainty": "routine", "source": "routine"},
     ]
 
 
@@ -897,6 +910,8 @@ def _apply_hard_blocks(events: list[dict], *, life_constraints: dict) -> list[di
                 "activity": str(block.get("activity") or "已确定安排")[:80],
                 "location": str(block.get("location") or "按事实地点")[:80],
                 "intent": str(block.get("intent") or "硬事实锁定，不能被其他活动覆盖。")[:180],
+                "certainty": "hard",
+                "source": "fact",
             }
         )
     return sorted(kept, key=lambda item: _time_range_start_minutes(str(item.get("timeRange") or "")))

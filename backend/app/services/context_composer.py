@@ -25,6 +25,7 @@ def compose_prompt_context(
     short_term = _format_short_term(settings=settings, prompt_history=prompt_history)
 
     world_current = _format_world_current(world_context=world_context, life_context=life_context)
+    world_future = _format_future_timeline(life_context=life_context, world_context=world_context)
     world_commitments = _format_world_commitments(world_context)
     world_trajectory = _format_world_trajectory(life_context)
     world_user = _format_user_context(user_context)
@@ -35,6 +36,7 @@ def compose_prompt_context(
     life_text = _format_life_context(life_context)
     context_brief = _format_context_brief(
         current=world_current,
+        future=world_future,
         commitments=world_commitments,
         trajectory=world_trajectory,
         user=world_user,
@@ -55,6 +57,7 @@ def compose_prompt_context(
         "current.weather": _format_weather(environment) if environment_settings.get("weather") else "",
         "world.context": world_legacy,
         "world.current": world_current,
+        "world.future": world_future,
         "world.commitments": world_commitments,
         "world.trajectory": world_trajectory,
         "world.user": world_user,
@@ -77,6 +80,7 @@ def compose_prompt_context(
             "world": {
                 "brief": context_brief,
                 "current": world_current,
+                "future": world_future,
                 "commitments": world_commitments,
                 "trajectory": world_trajectory,
                 "user": world_user,
@@ -100,6 +104,7 @@ def compose_prompt_context(
 def _format_context_brief(
     *,
     current: str,
+    future: str,
     commitments: str,
     trajectory: str,
     user: str,
@@ -112,6 +117,7 @@ def _format_context_brief(
     sections = [
         ("最高优先级一致性规则", guardrails),
         ("Alicer 当前状态", current),
+        ("Alicer 未来时间线", future),
         ("未完成承诺、计划和稳定事实", commitments),
         ("用户现实线索", user),
         ("照片/自拍连续性", photos),
@@ -122,7 +128,7 @@ def _format_context_brief(
     ]
     lines = [
         "下面是本轮回复唯一需要使用的运行上下文，按优先级排列；不要逐段复述，只在相关时自然使用。",
-        "如果不同来源冲突，优先级为：事实账本/明确承诺 > 当前生活状态 > 最近聊天 > 长期记忆 > 随机发挥。",
+        "如果不同来源冲突，优先级为：硬事实/明确承诺 > 当前生活状态 > 今日剩余计划 > 长期节律 > 最近聊天 > 长期记忆 > 随机发挥。",
     ]
     for title, content in sections:
         text = str(content or "").strip()
@@ -186,6 +192,141 @@ def _format_world_commitments(world_context: dict) -> str:
         lines.append("未完成/即将发生的承诺与计划：")
         lines.extend(_fact_line(item) for item in upcoming[:10])
     return "\n".join(lines) or "暂无未完成承诺或近期计划。"
+
+
+def _format_future_timeline(*, life_context: dict, world_context: dict) -> str:
+    if not life_context or life_context.get("enabled") is False:
+        return "未启用生活模拟；不要凭空声称未来具体安排。"
+    plan = life_context.get("plan") or {}
+    constraints = life_context.get("lifeConstraints") or {}
+    routine = life_context.get("routine") or {}
+    now = dt.datetime.now().astimezone()
+    lines = [
+        "未来回答规则：",
+        "- 用户问“等会儿/下午/今晚/明天做什么”时，优先使用这里的时间线；不要脱离计划临场编排。",
+        "- 硬日程用确定语气；普通计划用“准备/大概/计划是”；节律推断只能说成倾向。",
+        "- 如果未来安排冲突，承认原计划被硬事实阻断，并自然改期或说明不能同时做到。",
+    ]
+    if plan:
+        date = str(plan.get("date") or life_context.get("planDate") or "").strip()
+        source = str(plan.get("source") or "").strip()
+        day_theme = str(plan.get("dayTheme") or "").strip()
+        generated = str(plan.get("generatedAt") or "").strip()
+        meta = "，".join(item for item in (f"日期 {date}" if date else "", f"来源 {source}" if source else "", f"生成 {generated}" if generated else "") if item)
+        if meta or day_theme:
+            lines.append("今日计划概况：" + "；".join(item for item in (meta, day_theme) if item))
+    next_event, remaining, earlier = _split_plan_events(plan.get("plannedEvents") or [], now=now)
+    hard_blocks = constraints.get("hardBlocks") or plan.get("hardBlocks") or []
+    if hard_blocks:
+        lines.append("已锁定硬日程：")
+        for item in hard_blocks[:8]:
+            lines.append("  - " + _timeline_event_line(item, default_certainty="hard"))
+    if next_event:
+        lines.append("下一段计划：")
+        lines.append("  - " + _timeline_event_line(next_event, default_certainty=str(next_event.get("certainty") or "planned")))
+    if remaining:
+        lines.append("今日剩余计划：")
+        for item in remaining[:8]:
+            lines.append("  - " + _timeline_event_line(item, default_certainty=str(item.get("certainty") or "planned")))
+    elif earlier and not hard_blocks:
+        lines.append("今日计划中没有剩余可用时间块；不要继续沿用已过去的安排。")
+    conflicts = constraints.get("conflicts") or []
+    if conflicts:
+        lines.append("已知冲突/阻断：")
+        for item in conflicts[:5]:
+            message = str(item.get("message") or item.get("title") or "").strip()
+            if message:
+                lines.append(f"  - {message[:180]}")
+    upcoming = world_context.get("upcoming") or []
+    if upcoming:
+        lines.append("近未来明确事实/承诺：")
+        lines.extend("  - " + _fact_line(item) for item in upcoming[:6])
+    routine_summary = _routine_summary(routine)
+    if routine_summary:
+        lines.append("长期节律推断：" + routine_summary)
+    return "\n".join(lines)
+
+
+def _split_plan_events(events: list[dict], *, now: dt.datetime) -> tuple[dict | None, list[dict], list[dict]]:
+    parsed = []
+    for index, item in enumerate(events):
+        if not isinstance(item, dict):
+            continue
+        start, end = _parse_event_range_today(str(item.get("timeRange") or ""), now=now)
+        parsed.append((start, end, index, item))
+    parsed.sort(key=lambda row: (row[0] or dt.datetime.max.replace(tzinfo=now.tzinfo), row[2]))
+    current_or_next = None
+    remaining = []
+    earlier = []
+    for start, end, _index, item in parsed:
+        if end is not None and end <= now:
+            earlier.append(item)
+            continue
+        if current_or_next is None:
+            current_or_next = item
+        else:
+            remaining.append(item)
+    return current_or_next, remaining, earlier
+
+
+def _parse_event_range_today(value: str, *, now: dt.datetime) -> tuple[dt.datetime | None, dt.datetime | None]:
+    text = value.strip()
+    if "-" not in text:
+        return None, None
+    left, right = [part.strip() for part in text.split("-", 1)]
+    start = _parse_clock_today(left, now=now)
+    end = _parse_clock_today(right, now=now)
+    if start is not None and end is not None and end <= start:
+        end += dt.timedelta(days=1)
+    return start, end
+
+
+def _parse_clock_today(value: str, *, now: dt.datetime) -> dt.datetime | None:
+    try:
+        hour_text, minute_text = value.split(":", 1)
+        hour = int(hour_text)
+        minute = int(minute_text[:2])
+    except Exception:
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def _timeline_event_line(item: dict, *, default_certainty: str) -> str:
+    time_range = str(item.get("timeRange") or "").strip()
+    activity = str(item.get("activity") or item.get("title") or "未命名安排").strip()
+    location = str(item.get("location") or "").strip()
+    intent = str(item.get("intent") or "").strip()
+    certainty = str(item.get("certainty") or default_certainty or "planned").strip()
+    source = str(item.get("source") or "").strip()
+    label = {
+        "hard": "硬日程",
+        "planned": "计划",
+        "routine": "节律推断",
+        "tentative": "暂定",
+    }.get(certainty, certainty)
+    parts = [time_range, activity]
+    if location:
+        parts.append(f"@{location}")
+    detail = " ".join(part for part in parts if part)
+    suffix = "，".join(item for item in (label, f"来源 {source}" if source else "", intent[:100] if intent else "") if item)
+    return f"{detail}（{suffix}）" if suffix else detail
+
+
+def _routine_summary(routine: dict) -> str:
+    if not routine:
+        return ""
+    routine_type = str(routine.get("type") or "").strip()
+    if routine_type == "roster":
+        return "排班制；没有硬航班事实时，只能推断为备勤、培训、恢复、休息或个人/兼职安排，不能说每天执飞。"
+    if routine_type == "weekday_office":
+        return "工作日办公室节律；周末默认休息，除非事实账本明确有加班/兼职/约定。"
+    if routine_type == "flexible":
+        return "弹性工作节律；可安排项目、副业、个人事务，但具体承诺仍以事实账本为准。"
+    if routine_type == "campus":
+        return "校园节律；课程、自习和休息按日期变化，具体安排以事实账本和今日计划为准。"
+    return str(routine.get("description") or routine_type or "").strip()[:160]
 
 
 def _format_world_trajectory(life_context: dict) -> str:
@@ -320,10 +461,12 @@ def _format_world_guardrails(world_context: dict) -> str:
     facts = world_context.get("activeFacts") or []
     lines = [
         "一致性守则：",
-        "- 事实账本、明确承诺、生活模拟当前状态优先于即兴发挥。",
+        "- 事实账本、明确承诺、生活模拟当前状态、未来时间线优先于即兴发挥。",
+        "- 回答未来安排时必须先看未来时间线；硬日程不能改，普通计划可用“准备/大概/计划是”表达，节律推断不能说成承诺。",
         "- 不要把用户的行程改写成 Alicer 自己的经历。",
         "- 不要临时改变职业、住处、长期习惯；除非事实账本明确更新。",
         "- 如果已有计划/承诺，不要安排冲突地点、时间或行动。",
+        "- 如果用户提出的新请求与硬日程冲突，要自然说明做不到或改期；不要嘴上答应但让后台计划不一致。",
     ]
     if facts:
         lines.append("- 低置信事实只能含蓄处理；时间已过或状态不明时不要说成确定发生。")
