@@ -183,7 +183,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.fact_check_outlined,
-              title: '01 Fact Ledger Engine · 事实账本引擎',
+              title: '01 事实账本引擎',
               subtitle: '消息先沉淀成硬事实、承诺和冲突；后面的上下文、生活计划和未来时间线都以它为准。',
               child: Column(
                 children: [
@@ -207,7 +207,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.public_rounded,
-              title: '02 Environment Engine · 环境引擎',
+              title: '02 环境引擎',
               subtitle: '采集当前时间、地点和天气，提供给上下文引擎做运行态输入。',
               child: Column(
                 children: [
@@ -257,7 +257,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.phone_android_outlined,
-              title: '03 User Timeline Engine · 用户轨迹引擎',
+              title: '03 用户轨迹引擎',
               subtitle: 'Android 后台归纳地点、音乐、运动和设备状态，作为用户侧上下文输入。',
               child: Column(
                 children: [
@@ -369,7 +369,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.timeline_outlined,
-              title: '04 Life Simulation Engine · 生活模拟引擎',
+              title: '04 生活模拟引擎',
               subtitle: '后台推进她自己的活动、地点、心情和日计划；聊天、朋友圈和主动行为共享同一生活状态。',
               child: Column(
                 children: [
@@ -448,7 +448,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.memory_rounded,
-              title: '05 Context Engine · 上下文引擎',
+              title: '05 上下文引擎',
               subtitle: '汇总事实账本、生活状态、用户轨迹、环境、记忆和聊天历史，决定每次生成能看到什么。',
               child: Column(
                 children: [
@@ -536,8 +536,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.auto_awesome_outlined,
-              title: '06 Prompt Engine · 提示词引擎',
-              subtitle: '在 Context Engine 之后渲染人设、风格和运行上下文模板；不负责自行判断事实。',
+              title: '06 提示词引擎',
+              subtitle: '在上下文引擎之后渲染人设、风格和运行上下文模板；不负责自行判断事实。',
               trailing: FilledButton.icon(
                 onPressed: _showPromptPreview,
                 icon: const Icon(Icons.code_rounded, size: 18),
@@ -571,7 +571,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.volunteer_activism_outlined,
-              title: '07 Proactive Engine · 主动引擎',
+              title: '07 主动引擎',
               subtitle: '基于生活模拟、事实账本和用户轨迹打分，决定是否主动聊天或发布朋友圈。',
               child: Column(
                 children: [
@@ -707,7 +707,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.photo_camera_back_outlined,
-              title: '08 Chat Photo Engine · 聊天照片引擎',
+              title: '08 聊天照片引擎',
               subtitle: '处理聊天里的照片请求、主动生活照和每日生成额度。',
               child: Column(
                 children: [
@@ -778,8 +778,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.photo_camera_back_outlined,
-              title: '09 Moment Engine · 朋友圈引擎',
-              subtitle: '生成朋友圈正文、评论回复和配图；主动发布由 Proactive Engine 触发。',
+              title: '09 朋友圈引擎',
+              subtitle: '生成朋友圈正文、评论回复和配图；主动发布由主动引擎触发。',
               child: Column(
                 children: [
                   _SliderRow(
@@ -835,7 +835,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.hub_outlined,
-              title: '10 Runtime & Model · 运行时与模型',
+              title: '10 运行时与模型',
               subtitle: 'Alicer 后端地址、管理口令、DeepSeek 模型和生成参数。',
               child: Column(
                 children: [
