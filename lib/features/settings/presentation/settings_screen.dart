@@ -1704,6 +1704,16 @@ class _LifeRecordsPanel extends StatelessWidget {
       (life['profile'] as Map?) ?? const {},
     );
     final plan = Map<String, dynamic>.from((life['plan'] as Map?) ?? const {});
+    final lifeConstraints = Map<String, dynamic>.from(
+      (life['lifeConstraints'] as Map?) ?? const {},
+    );
+    final routine = Map<String, dynamic>.from(
+      (life['routine'] as Map?) ?? (profile['routine'] as Map?) ?? const {},
+    );
+    final hardBlocks =
+        ((lifeConstraints['hardBlocks'] as List?) ?? const <dynamic>[])
+            .whereType<Map>()
+            .toList();
     final isEnabled = life['enabled'] != false;
     final summary = _joinFilled([
       _readString(state, 'location'),
@@ -1791,6 +1801,11 @@ class _LifeRecordsPanel extends StatelessWidget {
                   _LifeFactChip(label: '作息', value: workStyle),
                   _LifeFactChip(label: '住处', value: homeBase),
                   _LifeFactChip(
+                    label: '节律',
+                    value: _readString(routine, 'type', fallback: '未归纳'),
+                  ),
+                  _LifeFactChip(label: '硬日程', value: '${hardBlocks.length}'),
+                  _LifeFactChip(
                     label: '精力',
                     value: _formatEnergy(state['energy']),
                   ),
@@ -1838,6 +1853,22 @@ class _LifeRecordsPanel extends StatelessWidget {
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
+                if (hardBlocks.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text('锁定日程', style: Theme.of(context).textTheme.labelMedium),
+                  for (final item in hardBlocks.take(4))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        _joinFilled([
+                          (item['timeRange'] ?? '').toString(),
+                          (item['location'] ?? '').toString(),
+                          (item['activity'] ?? '').toString(),
+                        ], separator: ' · '),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                ],
               ],
             ),
           ),

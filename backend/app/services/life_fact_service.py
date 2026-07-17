@@ -23,6 +23,22 @@ FACT_TYPES = {
     "life_event_hint",
     "moment_posted",
 }
+HARD_SCHEDULE_KEYWORDS = (
+    "航班",
+    "执飞",
+    "机场",
+    "上班",
+    "出差",
+    "值机",
+    "备勤",
+    "培训",
+    "约会",
+    "考试",
+    "入职",
+    "面试",
+)
+CONDITIONAL_KEYWORDS = ("如果", "若", "假如", "要是", "否则", "没出现", "来接", "接机")
+AVIATION_KEYWORDS = ("航班", "执飞", "机场", "机组", "空乘", "空姐", "值机", "落地", "登机", "备勤")
 VALUE_SIGNALS = re.compile(
     r"(明天|后天|今晚|今天|下周|周末|早上|中午|下午|晚上|凌晨|[0-2]?\d[:：点])"
     r"|航班|机场|出差|上班|加班|下班|请假|休假|约会|见朋友|回家|搬家|旅行|拍照|自拍|照片|记住|别忘|答应|说好",
@@ -228,9 +244,64 @@ def fact_constraints_for_life(db: Database, settings: dict | None = None) -> dic
     }
 
 
+def resolve_life_constraints_for_day(
+    db: Database,
+    day: dt.date,
+    settings: dict | None = None,
+) -> dict:
+    merged = merge_settings(settings or db.get_settings())
+    cleanup_life_facts(db)
+    facts = db.list_life_facts(statuses=ACTIVE_STATUSES, limit=120)
+    day_start = dt.datetime(day.year, day.month, day.day, tzinfo=TZ)
+    day_end = day_start + dt.timedelta(days=1)
+    hard_blocks: list[dict] = []
+    conditional: list[dict] = []
+    soft_hints: list[dict] = []
+    profile_facts: list[dict] = []
+    allowed_locations: set[str] = set()
+
+    for fact in facts:
+        fact_type = str(fact.get("type") or "")
+        text = f"{fact.get('title') or ''} {fact.get('summary') or ''}"
+        start = _from_timestamp(fact.get("startsAt"))
+        end = _from_timestamp(fact.get("endsAt"))
+        if fact_type == "profile_fact":
+            profile_facts.append(_public_fact(fact))
+            allowed_locations.update(_locations_from_text(text))
+            continue
+        if not _touches_day(start, end, day_start, day_end):
+            if fact_type == "life_event_hint":
+                soft_hints.append(_public_fact(fact))
+            continue
+        if _is_conditional_fact(fact):
+            conditional.append(_public_fact(fact))
+            allowed_locations.update(_locations_from_text(text))
+            continue
+        if _is_hard_schedule_fact(fact):
+            blocks = _hard_blocks_from_fact(fact, day_start=day_start, day_end=day_end)
+            hard_blocks.extend(blocks)
+            for block in blocks:
+                allowed_locations.update(_locations_from_text(f"{block.get('activity') or ''} {block.get('location') or ''}"))
+            continue
+        soft_hints.append(_public_fact(fact))
+        allowed_locations.update(_locations_from_text(text))
+
+    hard_blocks = _dedupe_hard_blocks(hard_blocks)
+    conflicts = _find_constraint_conflicts(hard_blocks=hard_blocks, conditional=conditional, soft_hints=soft_hints)
+    return {
+        "day": day.isoformat(),
+        "hardBlocks": hard_blocks,
+        "conditionalCommitments": conditional[:16],
+        "softHints": soft_hints[:16],
+        "profileFacts": profile_facts[:12],
+        "conflicts": conflicts[:24],
+        "allowedLocations": sorted(allowed_locations),
+        "summary": _format_constraint_summary(hard_blocks, conditional, soft_hints, conflicts),
+    }
+
+
 def cleanup_life_facts(db: Database, *, now: float | None = None) -> dict:
     value = now or dt.datetime.now(TZ).timestamp()
-    expired = db.expire_life_facts(now=value)
     activated = 0
     archived = 0
     completed = 0
@@ -259,6 +330,7 @@ def cleanup_life_facts(db: Database, *, now: float | None = None) -> dict:
             stale = True
         if stale and db.update_life_fact_status(str(fact["id"]), status="archived", metadata={"autoArchivedAt": value}):
             archived += 1
+    expired = db.expire_life_facts(now=value)
     superseded = _dedupe_life_facts(db, now=value)
     return {
         "expired": expired,
@@ -321,6 +393,11 @@ def normalize_fact_patch(body: dict) -> dict:
         result["related"] = body["related"]
     if isinstance(body.get("metadata"), dict):
         result["metadata"] = body["metadata"]
+    for source, target in (("effectiveAt", "effectiveAt"), ("endedAt", "endedAt")):
+        if source in body:
+            parsed = _parse_time(body.get(source))
+            if parsed is not None:
+                result.setdefault("metadata", {})[target] = parsed
     if "supersedesId" in body:
         result["supersedes_id"] = str(body.get("supersedesId") or "")
     return result
@@ -508,7 +585,221 @@ def _public_fact(item: dict) -> dict:
         "confidence": item.get("confidence"),
         "importance": item.get("importance"),
         "timeWindow": _time_window(item),
+        "metadata": item.get("metadata") or {},
     }
+
+
+def _is_hard_schedule_fact(fact: dict) -> bool:
+    fact_type = str(fact.get("type") or "")
+    if fact_type not in {"schedule_commitment", "current_state"}:
+        return False
+    if fact.get("startsAt") is None:
+        return False
+    confidence = float(fact.get("confidence") or 0)
+    importance = float(fact.get("importance") or 0)
+    text = f"{fact.get('title') or ''} {fact.get('summary') or ''}"
+    if any(word in text for word in HARD_SCHEDULE_KEYWORDS):
+        return confidence >= 0.6 or importance >= 0.6
+    if fact.get("endsAt") is not None:
+        start = _from_timestamp(fact.get("startsAt"))
+        end = _from_timestamp(fact.get("endsAt"))
+        if start and end and (end - start) <= dt.timedelta(hours=14):
+            return confidence >= 0.75 and importance >= 0.65
+    return False
+
+
+def _is_conditional_fact(fact: dict) -> bool:
+    fact_type = str(fact.get("type") or "")
+    text = f"{fact.get('title') or ''} {fact.get('summary') or ''}"
+    if fact_type == "relationship_commitment":
+        return True
+    return any(word in text for word in CONDITIONAL_KEYWORDS)
+
+
+def _hard_blocks_from_fact(fact: dict, *, day_start: dt.datetime, day_end: dt.datetime) -> list[dict]:
+    start = _from_timestamp(fact.get("startsAt"))
+    end = _from_timestamp(fact.get("endsAt"))
+    if start is None:
+        return []
+    text = f"{fact.get('title') or ''} {fact.get('summary') or ''}"
+    is_flight = any(word in text for word in ("航班", "执飞", "落地", "机组"))
+    if end is None:
+        end = start + (dt.timedelta(hours=4) if is_flight else dt.timedelta(hours=2))
+    start = max(start, day_start)
+    end = min(end, day_end)
+    if end <= start:
+        return []
+    blocks: list[dict] = []
+    if is_flight:
+        prep_start = max(day_start, start - dt.timedelta(minutes=90))
+        if prep_start < start:
+            blocks.append(
+                _constraint_block(
+                    fact=fact,
+                    start=prep_start,
+                    end=start,
+                    activity="前往机场和值机准备",
+                    location=_infer_location_from_text(text, fallback="机场/路上"),
+                    intent="为已确定航班预留通勤、值机和机组准备时间",
+                    priority=95,
+                    block_type="travel_buffer",
+                )
+            )
+        blocks.append(
+            _constraint_block(
+                fact=fact,
+                start=start,
+                end=end,
+                activity=str(fact.get("title") or "执飞航班")[:80],
+                location=_infer_location_from_text(text, fallback="机场/机上"),
+                intent=str(fact.get("summary") or "已确定航班任务，其他安排不得覆盖。")[:180],
+                priority=100,
+                block_type="hard_schedule",
+            )
+        )
+        return blocks
+    blocks.append(
+        _constraint_block(
+            fact=fact,
+            start=start,
+            end=end,
+            activity=str(fact.get("title") or "已确定安排")[:80],
+            location=_infer_location_from_text(text, fallback="按事实地点"),
+            intent=str(fact.get("summary") or "已确定安排，其他安排不得覆盖。")[:180],
+            priority=90,
+            block_type="hard_schedule",
+        )
+    )
+    return blocks
+
+
+def _constraint_block(
+    *,
+    fact: dict,
+    start: dt.datetime,
+    end: dt.datetime,
+    activity: str,
+    location: str,
+    intent: str,
+    priority: int,
+    block_type: str,
+) -> dict:
+    return {
+        "timeRange": f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}",
+        "startsAt": start.timestamp(),
+        "endsAt": end.timestamp(),
+        "activity": activity,
+        "location": location,
+        "intent": intent,
+        "priority": priority,
+        "type": block_type,
+        "sourceFactIds": [fact.get("id")],
+    }
+
+
+def _dedupe_hard_blocks(blocks: list[dict]) -> list[dict]:
+    result: list[dict] = []
+    for block in sorted(blocks, key=lambda item: (float(item.get("startsAt") or 0), -int(item.get("priority") or 0))):
+        duplicate_index = -1
+        for index, existing in enumerate(result):
+            if not _blocks_overlap(existing, block):
+                continue
+            same_kind = ("航班" in f"{existing.get('activity')} {block.get('activity')}") or existing.get("type") == block.get("type")
+            if same_kind:
+                duplicate_index = index
+                break
+        if duplicate_index < 0:
+            result.append(block)
+            continue
+        existing = result[duplicate_index]
+        keep, drop = (block, existing) if _block_score(block) > _block_score(existing) else (existing, block)
+        keep["sourceFactIds"] = list(dict.fromkeys([*(keep.get("sourceFactIds") or []), *(drop.get("sourceFactIds") or [])]))
+        result[duplicate_index] = keep
+    return sorted(result, key=lambda item: float(item.get("startsAt") or 0))
+
+
+def _block_score(block: dict) -> tuple[int, float, float]:
+    return (
+        int(block.get("priority") or 0),
+        float(block.get("endsAt") or 0) - float(block.get("startsAt") or 0),
+        float(block.get("startsAt") or 0),
+    )
+
+
+def _find_constraint_conflicts(*, hard_blocks: list[dict], conditional: list[dict], soft_hints: list[dict]) -> list[dict]:
+    conflicts: list[dict] = []
+    for fact in [*conditional, *soft_hints]:
+        start = _from_timestamp(fact.get("startsAt"))
+        end = _from_timestamp(fact.get("endsAt")) or (start + dt.timedelta(hours=2) if start else None)
+        if start is None or end is None:
+            continue
+        for block in hard_blocks:
+            block_start = _from_timestamp(block.get("startsAt"))
+            block_end = _from_timestamp(block.get("endsAt"))
+            if block_start and block_end and start < block_end and end > block_start:
+                conflicts.append(
+                    {
+                        "factId": fact.get("id"),
+                        "blockedBy": block.get("sourceFactIds") or [],
+                        "message": f"{fact.get('title') or '安排'} 与硬日程 {block.get('timeRange')} {block.get('activity')} 冲突，应延期、改约或标记未触发。",
+                    }
+                )
+    return conflicts
+
+
+def _format_constraint_summary(hard_blocks: list[dict], conditional: list[dict], soft_hints: list[dict], conflicts: list[dict]) -> str:
+    lines: list[str] = []
+    if hard_blocks:
+        lines.append("硬日程：")
+        lines.extend(f"- {item['timeRange']} {item['activity']} @ {item['location']}" for item in hard_blocks[:8])
+    if conditional:
+        lines.append("条件承诺：")
+        lines.extend(f"- {item.get('timeWindow') or ''} {item.get('title')}: {item.get('summary')}".strip() for item in conditional[:6])
+    if soft_hints:
+        lines.append("软提示：")
+        lines.extend(f"- {item.get('title')}: {item.get('summary')}" for item in soft_hints[:6])
+    if conflicts:
+        lines.append("冲突处理：")
+        lines.extend(f"- {item['message']}" for item in conflicts[:6])
+    return "\n".join(lines) or "暂无当天额外日程约束。"
+
+
+def _touches_day(start: dt.datetime | None, end: dt.datetime | None, day_start: dt.datetime, day_end: dt.datetime) -> bool:
+    if start is None:
+        return False
+    end = end or start + dt.timedelta(hours=2)
+    return start < day_end and end > day_start
+
+
+def _blocks_overlap(left: dict, right: dict) -> bool:
+    left_start = float(left.get("startsAt") or 0)
+    left_end = float(left.get("endsAt") or left_start)
+    right_start = float(right.get("startsAt") or 0)
+    right_end = float(right.get("endsAt") or right_start)
+    return left_start < right_end and right_start < left_end
+
+
+def _locations_from_text(text: str) -> set[str]:
+    locations: set[str] = set()
+    for word in ("机场", "航站楼", "机上", "机组休息室", "酒店", "公司", "学校", "医院", "工作室", "家", "路上", "温泉镇", "马连洼", "大连", "北京", "广州", "上海", "深圳", "成都", "杭州"):
+        if word in text:
+            locations.add(word)
+    if any(word in text for word in AVIATION_KEYWORDS):
+        locations.update({"机场", "航站楼", "机上", "机组休息室", "路上"})
+    return locations
+
+
+def _infer_location_from_text(text: str, *, fallback: str) -> str:
+    if "北京至大连" in text or "大连" in text:
+        return "机场/机上/大连"
+    if "广州" in text:
+        return "机场/机上/广州"
+    if any(word in text for word in ("航班", "执飞", "机组", "落地")):
+        return "机场/机上"
+    for word in ("机场", "航站楼", "机组休息室", "酒店", "公司", "学校", "工作室", "家", "温泉镇", "马连洼"):
+        if word in text:
+            return word
+    return fallback
 
 
 def _time_window(item: dict) -> str:
