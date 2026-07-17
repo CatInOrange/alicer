@@ -12,6 +12,7 @@ from .prompt_service import merge_settings
 
 
 TZ = ZoneInfo("Asia/Shanghai")
+USER_DAY_BOUNDARY_HOUR = 4
 ACTIVE_STATUSES = ("candidate", "planned", "active")
 VISIBLE_STATUSES = ("candidate", "planned", "active", "completed", "cancelled", "superseded", "expired", "archived")
 FACT_TYPES = {
@@ -26,6 +27,10 @@ VALUE_SIGNALS = re.compile(
     r"(明天|后天|今晚|今天|下周|周末|早上|中午|下午|晚上|凌晨|[0-2]?\d[:：点])"
     r"|航班|机场|出差|上班|加班|下班|请假|休假|约会|见朋友|回家|搬家|旅行|拍照|自拍|照片|记住|别忘|答应|说好",
     re.IGNORECASE,
+)
+RELATIVE_TIME_RE = re.compile(r"(今天|明天|后天|今晚|下周|周末)")
+EXPLICIT_CLOCK_RE = re.compile(
+    r"(?P<hour>[0-2]?\d)(?:[:：](?P<minute>\d{1,2})|点(?P<half>半)?(?:(?P<minute_cn>\d{1,2})分?)?)"
 )
 
 
@@ -62,9 +67,12 @@ async def extract_life_facts(
     life_context: dict | None = None,
 ) -> list[dict]:
     merged = merge_settings(settings or db.get_settings())
-    db.expire_life_facts()
+    cleanup_life_facts(db)
     existing = build_world_context(db, merged)
     companion = str(((merged.get("companion") or {}).get("name") or "Alice")).strip() or "Alice"
+    extracted_at = dt.datetime.now(TZ)
+    conversation_time = _message_datetime(user_message, fallback=extracted_at)
+    life_day = _life_day(conversation_time)
     prompt = [
         {
             "role": "system",
@@ -75,7 +83,14 @@ async def extract_life_facts(
                 "只抽会影响后续聊天、生活模拟、朋友圈或承诺兑现的一致性事实。"
                 "每条 facts 字段：type,title,summary,startsAt,endsAt,expiresAt,confidence,importance,status。"
                 "type 只能是 schedule_commitment/relationship_commitment/current_state/profile_fact/life_event_hint。"
-                "时间用 ISO8601；不确定可留空。status 通常 planned 或 candidate，正在发生用 active。"
+                "时间必须用 Asia/Shanghai 的 ISO8601；不确定可留空。"
+                "所有相对时间必须以 userMessage.createdAt 为锚点，不以抽取执行时间为锚点。"
+                "用户生活日以凌晨4点为界：00:00-03:59 仍算前一生活日；例如凌晨2点说“明天”指日历上的今天。"
+                "title 和 summary 不得保留“今天/明天/后天/今晚/下周/周末”等相对日期词，必须改写成绝对日期或具体时间。"
+                "只抽 Alicer 自己的事实，或 Alicer 对用户/关系作出的承诺；用户自己的行程、经历、计划不得变成 Alicer 的事实。"
+                "如果无法确定 actor，丢弃；如果无法确定时间但事实重要，status 用 candidate 且 confidence 不超过 0.6。"
+                "如果新事实修正或替代 activeFacts 中旧事实，在 summary 里说明修正点，并尽量给出 supersedesId。"
+                "status 通常 planned 或 candidate，正在发生用 active。"
                 "profile_fact 只用于稳定设定变化，必须高置信。"
             ),
         },
@@ -83,13 +98,19 @@ async def extract_life_facts(
             "role": "user",
             "content": json.dumps(
                 {
-                    "now": dt.datetime.now(TZ).isoformat(),
+                    "now": extracted_at.isoformat(),
+                    "extractedAt": extracted_at.isoformat(),
+                    "conversationTime": conversation_time.isoformat(),
+                    "userLifeDay": life_day.isoformat(),
+                    "relativeTimeRule": "以 userMessage.createdAt 为锚点；先减去4小时得到用户生活日，再解析今天/明天/后天。",
                     "userMessage": {
                         "id": user_message.get("id"),
+                        "createdAt": conversation_time.isoformat(),
                         "content": str(user_message.get("content") or "")[:1600],
                     },
                     "assistantMessage": {
                         "id": assistant_message.get("id"),
+                        "createdAt": _message_datetime(assistant_message, fallback=conversation_time).isoformat(),
                         "content": str(assistant_message.get("content") or "")[:2000],
                     },
                     "currentLifeState": (life_context or {}).get("state") or {},
@@ -111,7 +132,13 @@ async def extract_life_facts(
     for item in facts[:8]:
         if not isinstance(item, dict):
             continue
-        normalized = _normalize_fact(item, user_message=user_message, assistant_message=assistant_message)
+        normalized = _normalize_fact(
+            item,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            anchor_time=conversation_time,
+            extracted_at=extracted_at,
+        )
         if normalized is None:
             continue
         _supersede_conflicts(db, normalized)
@@ -127,6 +154,7 @@ async def refresh_life_facts_from_recent_chat(
     limit: int = 40,
 ) -> dict:
     merged = merge_settings(settings or db.get_settings())
+    pre_cleanup = cleanup_life_facts(db)
     messages = db.list_messages(limit=max(2, min(limit, 120)))
     pairs: list[tuple[dict, dict]] = []
     pending_user: dict | None = None
@@ -154,7 +182,7 @@ async def refresh_life_facts_from_recent_chat(
         "scannedMessages": len(messages),
         "candidatePairs": len(pairs),
         "savedFacts": saved,
-        "cleanup": cleanup,
+        "cleanup": {"before": pre_cleanup, "after": cleanup},
         "world": build_world_context(db, merged),
         "audit": audit_life_facts(db),
     }
@@ -205,6 +233,14 @@ def cleanup_life_facts(db: Database, *, now: float | None = None) -> dict:
     expired = db.expire_life_facts(now=value)
     activated = 0
     archived = 0
+    completed = 0
+    for fact in db.list_life_facts(statuses=["active"], limit=120, include_expired=True):
+        ends_at = fact.get("endsAt")
+        if ends_at is None:
+            continue
+        if value > float(ends_at) + 2 * 3600:
+            if db.update_life_fact_status(str(fact["id"]), status="completed", metadata={"autoCompletedAt": value}):
+                completed += 1
     for fact in db.list_life_facts(statuses=["planned"], limit=120, include_expired=True):
         starts_at = fact.get("startsAt")
         ends_at = fact.get("endsAt")
@@ -223,7 +259,14 @@ def cleanup_life_facts(db: Database, *, now: float | None = None) -> dict:
             stale = True
         if stale and db.update_life_fact_status(str(fact["id"]), status="archived", metadata={"autoArchivedAt": value}):
             archived += 1
-    return {"expired": expired, "activated": activated, "archived": archived}
+    superseded = _dedupe_life_facts(db, now=value)
+    return {
+        "expired": expired,
+        "activated": activated,
+        "completed": completed,
+        "archived": archived,
+        "supersededDuplicates": superseded,
+    }
 
 
 def audit_life_facts(db: Database) -> dict:
@@ -290,22 +333,33 @@ def _should_extract(user_message: dict, assistant_message: dict) -> bool:
     return bool(VALUE_SIGNALS.search(text))
 
 
-def _normalize_fact(item: dict, *, user_message: dict, assistant_message: dict) -> dict | None:
+def _normalize_fact(
+    item: dict,
+    *,
+    user_message: dict,
+    assistant_message: dict,
+    anchor_time: dt.datetime | None = None,
+    extracted_at: dt.datetime | None = None,
+) -> dict | None:
     fact_type = str(item.get("type") or "").strip()
     if fact_type not in FACT_TYPES:
         return None
-    title = " ".join(str(item.get("title") or "").split())[:200]
-    summary = " ".join(str(item.get("summary") or title).split())[:1000]
+    anchor = anchor_time or _message_datetime(user_message)
+    extracted = extracted_at or dt.datetime.now(TZ)
+    raw_title = " ".join(str(item.get("title") or "").split())
+    raw_summary = " ".join(str(item.get("summary") or raw_title).split())
+    title = _rewrite_relative_time_text(raw_title, anchor)[:200]
+    summary = _rewrite_relative_time_text(raw_summary or title, anchor)[:1000]
     if not title and not summary:
         return None
     confidence = _clamp_float(item.get("confidence"), default=0.65)
     importance = _clamp_float(item.get("importance"), default=0.55)
     if confidence < 0.5 and importance < 0.7:
         return None
-    starts_at = _parse_time(item.get("startsAt"))
+    starts_at = _parse_time(item.get("startsAt")) or _infer_relative_start(raw_title, raw_summary, anchor)
     ends_at = _parse_time(item.get("endsAt"))
     expires_at = _parse_time(item.get("expiresAt"))
-    expires_at = expires_at or _default_expiry(fact_type, starts_at, ends_at)
+    expires_at = expires_at or _default_expiry(fact_type, starts_at, ends_at, anchor=anchor)
     status = str(item.get("status") or "").strip() or ("planned" if starts_at else "candidate")
     if status not in {"candidate", "planned", "active", "completed", "cancelled"}:
         status = "candidate"
@@ -329,6 +383,11 @@ def _normalize_fact(item: dict, *, user_message: dict, assistant_message: dict) 
         "metadata": {
             "extractor": "life_fact_service",
             "rawType": item.get("type"),
+            "timeAnchor": anchor.isoformat(),
+            "userLifeDay": _life_day(anchor).isoformat(),
+            "extractedAt": extracted.isoformat(),
+            "rawTitle": raw_title,
+            "rawSummary": raw_summary,
         },
     }
 
@@ -351,6 +410,55 @@ def _supersede_conflicts(db: Database, fact: dict) -> None:
                 metadata={"supersededBy": fact["fact_id"]},
                 supersedes_id=fact["fact_id"],
             )
+
+
+def _dedupe_life_facts(db: Database, *, now: float) -> int:
+    facts = db.list_life_facts(statuses=ACTIVE_STATUSES, limit=160, include_expired=True)
+    superseded = 0
+    for index, left in enumerate(facts):
+        if left.get("status") not in ACTIVE_STATUSES:
+            continue
+        for right in facts[index + 1 :]:
+            if right.get("status") not in ACTIVE_STATUSES:
+                continue
+            if left.get("id") == right.get("id") or left.get("type") != right.get("type"):
+                continue
+            same_source = bool(left.get("sourceMessageId")) and left.get("sourceMessageId") == right.get("sourceMessageId")
+            if not same_source and not _facts_overlap(left, right):
+                continue
+            overlap = _text_overlap(
+                f"{left.get('title') or ''} {left.get('summary') or ''}",
+                f"{right.get('title') or ''} {right.get('summary') or ''}",
+            )
+            if not same_source and overlap < 4:
+                continue
+            keep, drop = _preferred_fact(left, right)
+            updated = db.update_life_fact_status(
+                str(drop["id"]),
+                status="superseded",
+                metadata={"autoSupersededDuplicateAt": now, "supersededBy": keep.get("id")},
+                supersedes_id=str(keep.get("id") or ""),
+            )
+            if updated is not None:
+                drop["status"] = "superseded"
+                superseded += 1
+    return superseded
+
+
+def _preferred_fact(left: dict, right: dict) -> tuple[dict, dict]:
+    status_rank = {"active": 3, "planned": 2, "candidate": 1}
+
+    def score(item: dict) -> tuple[float, float, float, float]:
+        return (
+            float(status_rank.get(str(item.get("status") or ""), 0)),
+            float(item.get("importance") or 0),
+            float(item.get("confidence") or 0),
+            float(item.get("updatedAt") or 0),
+        )
+
+    if score(left) >= score(right):
+        return left, right
+    return right, left
 
 
 def _facts_overlap(left: dict, right: dict) -> bool:
@@ -413,6 +521,102 @@ def _time_window(item: dict) -> str:
     return ""
 
 
+def _message_datetime(message: dict, *, fallback: dt.datetime | None = None) -> dt.datetime:
+    fallback_value = fallback or dt.datetime.now(TZ)
+    value = message.get("createdAt") or message.get("created_at")
+    if isinstance(value, (int, float)):
+        try:
+            return dt.datetime.fromtimestamp(float(value), tz=TZ)
+        except (ValueError, OSError):
+            return fallback_value
+    if isinstance(value, str) and value.strip():
+        parsed = _parse_datetime(value)
+        if parsed is not None:
+            return parsed
+    return fallback_value
+
+
+def _life_day(anchor: dt.datetime) -> dt.date:
+    return (anchor.astimezone(TZ) - dt.timedelta(hours=USER_DAY_BOUNDARY_HOUR)).date()
+
+
+def _rewrite_relative_time_text(text: str, anchor: dt.datetime) -> str:
+    if not text:
+        return text
+    life_day = _life_day(anchor)
+
+    def replacement(match: re.Match[str]) -> str:
+        token = match.group(1)
+        target = _relative_target_date(token, life_day)
+        if token == "今晚":
+            return f"{target.strftime('%m-%d')} 晚上"
+        return target.strftime("%m-%d")
+
+    return RELATIVE_TIME_RE.sub(replacement, text)
+
+
+def _infer_relative_start(title: str, summary: str, anchor: dt.datetime) -> float | None:
+    text = f"{title}\n{summary}"
+    match = RELATIVE_TIME_RE.search(text)
+    if match is None:
+        return None
+    target_date = _relative_target_date(match.group(1), _life_day(anchor))
+    hour, minute = _infer_clock(text, default_token=match.group(1))
+    return dt.datetime(
+        target_date.year,
+        target_date.month,
+        target_date.day,
+        hour,
+        minute,
+        tzinfo=TZ,
+    ).timestamp()
+
+
+def _relative_target_date(token: str, life_day: dt.date) -> dt.date:
+    if token in {"今天", "今晚"}:
+        return life_day
+    if token == "明天":
+        return life_day + dt.timedelta(days=1)
+    if token == "后天":
+        return life_day + dt.timedelta(days=2)
+    if token == "下周":
+        return life_day + dt.timedelta(days=7)
+    if token == "周末":
+        days_until_saturday = (5 - life_day.weekday()) % 7
+        if days_until_saturday == 0:
+            days_until_saturday = 7
+        return life_day + dt.timedelta(days=days_until_saturday)
+    return life_day
+
+
+def _infer_clock(text: str, *, default_token: str) -> tuple[int, int]:
+    match = EXPLICIT_CLOCK_RE.search(text)
+    if match is not None:
+        hour = max(0, min(23, int(match.group("hour"))))
+        minute_text = match.group("minute") or match.group("minute_cn")
+        minute = 30 if match.group("half") else int(minute_text or 0)
+        minute = max(0, min(59, minute))
+        prefix = text[max(0, match.start() - 4) : match.start()]
+        if any(word in prefix for word in ("下午", "晚上", "今晚")) and hour < 12:
+            hour += 12
+        if "中午" in prefix and hour < 11:
+            hour += 12
+        if "凌晨" in prefix and hour == 12:
+            hour = 0
+        return hour, minute
+    if default_token == "今晚" or "晚上" in text:
+        return 20, 0
+    if "凌晨" in text:
+        return 2, 0
+    if "中午" in text:
+        return 12, 0
+    if "下午" in text:
+        return 15, 0
+    if "早上" in text or "上午" in text:
+        return 9, 0
+    return 9, 0
+
+
 def _parse_time(value: object) -> float | None:
     if value is None or value == "":
         return None
@@ -421,13 +625,18 @@ def _parse_time(value: object) -> float | None:
     text = str(value).strip()
     if not text:
         return None
+    parsed = _parse_datetime(text)
+    return parsed.timestamp() if parsed is not None else None
+
+
+def _parse_datetime(value: str) -> dt.datetime | None:
     try:
-        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=TZ)
-        return parsed.astimezone(TZ).timestamp()
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=TZ)
+    return parsed.astimezone(TZ)
 
 
 def _from_timestamp(value: object) -> dt.datetime | None:
@@ -439,8 +648,14 @@ def _from_timestamp(value: object) -> dt.datetime | None:
         return None
 
 
-def _default_expiry(fact_type: str, starts_at: float | None, ends_at: float | None) -> float | None:
-    now = dt.datetime.now(TZ)
+def _default_expiry(
+    fact_type: str,
+    starts_at: float | None,
+    ends_at: float | None,
+    *,
+    anchor: dt.datetime | None = None,
+) -> float | None:
+    now = anchor or dt.datetime.now(TZ)
     if fact_type == "profile_fact":
         return None
     if ends_at:
