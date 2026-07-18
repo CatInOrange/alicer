@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import logging
 import random
 import re
 from zoneinfo import ZoneInfo
@@ -14,15 +15,48 @@ from .prompt_service import merge_settings
 
 
 TZ = ZoneInfo("Asia/Shanghai")
+logger = logging.getLogger(__name__)
 
 
 async def run_life_scheduler(db: Database, llm: LlmService) -> None:
-    await advance_life_until_now(db, llm)
+    await _safe_scheduler_advance(db, llm, source="startup")
     while True:
         now = dt.datetime.now(TZ)
         next_run = (now.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1))
         await asyncio.sleep(max(1.0, (next_run - now).total_seconds()))
-        await advance_life_until_now(db, llm)
+        await _safe_scheduler_advance(db, llm, source="hourly")
+
+
+async def _safe_scheduler_advance(db: Database, llm: LlmService, *, source: str) -> None:
+    started_at = dt.datetime.now(TZ).isoformat()
+    try:
+        result = await advance_life_until_now(db, llm)
+        created = result.get("created") or []
+        payload = {
+            "ok": True,
+            "source": source,
+            "startedAt": started_at,
+            "finishedAt": dt.datetime.now(TZ).isoformat(),
+            "advanced": bool(result.get("advanced")),
+            "reason": result.get("reason") or "",
+            "createdCount": len(created) if isinstance(created, list) else 0,
+            "latestStateAt": _state_updated_at_text(result.get("context") or {}),
+        }
+        db.upsert_scheduled_job(job_key="life:advance:last", result=payload)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        payload = {
+            "ok": False,
+            "source": source,
+            "startedAt": started_at,
+            "failedAt": dt.datetime.now(TZ).isoformat(),
+            "errorType": type(exc).__name__,
+            "error": str(exc)[:500],
+        }
+        db.upsert_scheduled_job(job_key="life:advance:error", result=payload)
+        db.upsert_scheduled_job(job_key="life:advance:last", result=payload)
+        logger.exception("life scheduler advance failed")
 
 
 async def advance_life_until_now(
@@ -991,6 +1025,17 @@ def _clamp_int(value: object, *, default: int, minimum: int, maximum: int) -> in
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(maximum, parsed))
+
+
+def _state_updated_at_text(context: dict) -> str:
+    state = (context or {}).get("state") or {}
+    try:
+        raw = float(state.get("updatedAt") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if raw <= 0:
+        return ""
+    return dt.datetime.fromtimestamp(raw, tz=TZ).isoformat()
 
 
 def _clamp_float(value: object, default: float) -> float:

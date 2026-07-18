@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import time
 import uuid
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -12,7 +14,7 @@ from ..db import Database
 from ..services.chat_photo_service import build_chat_photo_context, schedule_chat_photo_decision
 from ..services.life_fact_service import build_world_context, schedule_fact_extraction
 from ..services.llm_service import LlmService
-from ..services.life_service import build_life_context
+from ..services.life_service import advance_life_until_now, build_life_context
 from ..services.memory_service import maybe_process_memory_queue, memory_trigger_type, recall_memories
 from ..services.prompt_service import merge_settings, render_prompt
 from ..services.user_timeline_service import build_user_timeline_context
@@ -26,6 +28,7 @@ class ChatRequest(BaseModel):
 
 
 _BACKGROUND_STREAM_TASKS: set[asyncio.Task] = set()
+TZ = ZoneInfo("Asia/Shanghai")
 
 
 def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
@@ -53,7 +56,7 @@ def create_chat_router(db: Database, llm: LlmService) -> APIRouter:
             if message.get("id") != user_message.get("id")
         ]
         memories = recall_memories(db, text=text, limit=30)
-        life_context = build_life_context(db, settings)
+        life_context = await _build_current_life_context(db, llm, settings=settings, source="chat")
         user_context = build_user_timeline_context(db, settings)
         world_context = build_world_context(db, settings)
         messages, prompt_debug = render_prompt(
@@ -182,7 +185,7 @@ async def _run_stream_generation(
             if message.get("id") not in {assistant_id, user_message.get("id")}
         ]
         memories = recall_memories(db, text=text, limit=30)
-        life_context = build_life_context(db, settings)
+        life_context = await _build_current_life_context(db, llm, settings=settings, source="chat_stream")
         user_context = build_user_timeline_context(db, settings)
         world_context = build_world_context(db, settings)
         messages, prompt_debug = render_prompt(
@@ -310,3 +313,60 @@ def _queue_memory_extraction(
             force=trigger == "explicit",
         )
     )
+
+
+async def _build_current_life_context(
+    db: Database,
+    llm: LlmService,
+    *,
+    settings: dict,
+    source: str,
+) -> dict:
+    try:
+        force = _life_state_needs_chat_refresh(db)
+        result = await asyncio.wait_for(
+            advance_life_until_now(db, llm, settings=settings, force=force),
+            timeout=12.0,
+        )
+        context = result.get("context") or build_life_context(db, settings)
+        db.upsert_scheduled_job(
+            job_key="life:advance:chat:last",
+            result={
+                "ok": True,
+                "source": source,
+                "force": force,
+                "advanced": bool(result.get("advanced")),
+                "reason": result.get("reason") or "",
+                "createdCount": len(result.get("created") or []),
+                "ranAt": time.time(),
+            },
+        )
+        return context
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        db.upsert_scheduled_job(
+            job_key="life:advance:chat:error",
+            result={
+                "ok": False,
+                "source": source,
+                "errorType": type(exc).__name__,
+                "error": str(exc)[:500],
+                "ranAt": time.time(),
+            },
+        )
+        return build_life_context(db, settings)
+
+
+def _life_state_needs_chat_refresh(db: Database) -> bool:
+    now = dt.datetime.now(TZ).replace(minute=0, second=0, microsecond=0)
+    latest = db.latest_life_event_before(now.timestamp())
+    if not latest:
+        return True
+    try:
+        latest_time = dt.datetime.fromtimestamp(float(latest["eventTime"]), tz=TZ)
+    except (TypeError, ValueError, OSError, KeyError):
+        return True
+    if latest_time.replace(minute=0, second=0, microsecond=0) >= now:
+        return False
+    return dt.datetime.now(TZ) - latest_time > dt.timedelta(minutes=90)

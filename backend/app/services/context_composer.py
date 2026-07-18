@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import datetime as dt
+from zoneinfo import ZoneInfo
 
 
 RECENT_HISTORY_COUNT = 20
 RECENT_HISTORY_CHAR_BUDGET = 12_000
 OLDER_HISTORY_CHAR_BUDGET = 8_000
+TZ = ZoneInfo("Asia/Shanghai")
 
 
 def compose_prompt_context(
@@ -24,7 +26,14 @@ def compose_prompt_context(
     long_term = _format_memories(memories[:24]) if (settings.get("memory") or {}).get("longTerm", True) else ""
     short_term = _format_short_term(settings=settings, prompt_history=prompt_history)
 
-    world_current = _format_world_current(world_context=world_context, life_context=life_context)
+    now = _context_now(environment)
+    world_current = _format_world_current(
+        settings=settings,
+        environment=environment,
+        world_context=world_context,
+        life_context=life_context,
+        now=now,
+    )
     world_future = _format_future_timeline(life_context=life_context, world_context=world_context)
     world_commitments = _format_world_commitments(world_context)
     world_trajectory = _format_world_trajectory(life_context)
@@ -34,7 +43,7 @@ def compose_prompt_context(
     world_guardrails = _format_world_guardrails(world_context)
     world_legacy = _format_world_context(world_context)
     life_text = _format_life_context(life_context)
-    freshness = _build_projection_freshness(life_context=life_context, world_context=world_context)
+    freshness = _build_projection_freshness(life_context=life_context, world_context=world_context, now=now)
     projection_freshness = _format_projection_freshness(freshness)
     context_brief = _format_context_brief(
         projection_freshness=projection_freshness,
@@ -146,14 +155,15 @@ def _format_context_brief(
     return "\n".join(lines)
 
 
-def _build_projection_freshness(*, life_context: dict, world_context: dict) -> dict:
-    generated_at = dt.datetime.now().astimezone().isoformat()
+def _build_projection_freshness(*, life_context: dict, world_context: dict, now: dt.datetime | None = None) -> dict:
+    generated_at = (now or dt.datetime.now(TZ)).astimezone(TZ).isoformat()
     plan = life_context.get("plan") or {}
     world_freshness = world_context.get("freshness") or {}
     reconciliation = world_freshness.get("lastReconciliation") or {}
     reconciliation_result = reconciliation.get("result") if isinstance(reconciliation, dict) else {}
     latest_fact_updated_at = _to_float(world_freshness.get("latestFactUpdatedAt"))
-    life_state_updated_at = _to_float(life_context.get("updatedAt"))
+    state = life_context.get("state") or {}
+    life_state_updated_at = _to_float(state.get("updatedAt")) or _to_float(life_context.get("updatedAt"))
     return {
         "contextGeneratedAt": generated_at,
         "latestFactUpdatedAt": latest_fact_updated_at,
@@ -219,8 +229,19 @@ def select_prompt_history(*, settings: dict, recent_messages: list[dict]) -> lis
     return messages[-max_limit:]
 
 
-def _format_world_current(*, world_context: dict, life_context: dict) -> str:
-    lines = []
+def _format_world_current(
+    *,
+    world_context: dict,
+    life_context: dict,
+    settings: dict | None = None,
+    environment: dict | None = None,
+    now: dt.datetime | None = None,
+) -> str:
+    current_now = (now or _context_now(environment or {})).astimezone(TZ)
+    lines = [
+        f"当前真实时间（Asia/Shanghai）：{current_now.strftime('%Y-%m-%d %H:%M')}；北京时间=大连时间，不存在时差。",
+        "不要从旧生活事件、旧片段或“凌晨/早上”等叙事文字推断当前钟点；当前钟点只以这一行真实时间为准。",
+    ]
     current = world_context.get("current") or []
     if current:
         lines.append("当前必须保持一致的事实：")
@@ -233,10 +254,29 @@ def _format_world_current(*, world_context: dict, life_context: dict) -> str:
         f"精力{state.get('energy')}" if state.get("energy") else "",
     ]
     compact = "，".join(item for item in state_parts if item)
+    state_updated_at = _to_float(state.get("updatedAt")) or _to_float(life_context.get("updatedAt"))
+    state_is_fresh = _life_state_is_fresh(
+        state_updated_at,
+        now=current_now,
+        settings=settings or {},
+    )
     if compact:
-        lines.append(f"生活模拟当前状态：{compact}")
+        if state_is_fresh:
+            lines.append(f"生活模拟当前状态：{compact}")
+        else:
+            age = _age_text(state_updated_at, now=current_now)
+            suffix = f"（最后记录 {age}，可能已过期）" if age else "（没有可靠更新时间，不能当作当前状态）"
+            lines.append(f"上次生活模拟状态{suffix}：{compact}")
     if state.get("summary"):
-        lines.append(f"当前片段：{state['summary']}")
+        if state_is_fresh:
+            lines.append(f"当前片段：{state['summary']}")
+        else:
+            lines.append("旧生活片段已过期，不能把其中的时间词当成当前时间。")
+    plan = life_context.get("plan") or {}
+    next_event, _remaining, _earlier = _split_plan_events(plan.get("plannedEvents") or [], now=current_now)
+    if not state_is_fresh and next_event:
+        lines.append("按今日计划当前/下一段参考：")
+        lines.append("  - " + _timeline_event_line(next_event, default_certainty=str(next_event.get("certainty") or "planned")))
     return "\n".join(lines) or "暂无明确当前事实；回答时不要凭空声称正在做具体事情。"
 
 
@@ -661,7 +701,7 @@ def _created_at(item: dict) -> dt.datetime:
         value = float(raw)
     except (TypeError, ValueError):
         return dt.datetime.fromtimestamp(0, tz=dt.timezone.utc)
-    return dt.datetime.fromtimestamp(value, tz=dt.timezone.utc).astimezone()
+    return dt.datetime.fromtimestamp(value, tz=dt.timezone.utc).astimezone(TZ)
 
 
 def _to_float(value: object) -> float | None:
@@ -677,7 +717,66 @@ def _to_float(value: object) -> float | None:
 def _format_ts(value: float | None) -> str:
     if value is None:
         return ""
-    return dt.datetime.fromtimestamp(value, tz=dt.timezone.utc).astimezone().isoformat()
+    return dt.datetime.fromtimestamp(value, tz=dt.timezone.utc).astimezone(TZ).isoformat()
+
+
+def _context_now(environment: dict | None) -> dt.datetime:
+    raw = str((environment or {}).get("time") or "").strip()
+    if raw:
+        parsed = _parse_datetime(raw)
+        if parsed is not None:
+            return parsed.astimezone(TZ)
+    return dt.datetime.now(TZ)
+
+
+def _parse_datetime(value: str) -> dt.datetime | None:
+    text = value.strip()
+    if not text:
+        return None
+    candidates = [text]
+    if text.endswith("Z"):
+        candidates.append(text[:-1] + "+00:00")
+    for candidate in candidates:
+        try:
+            parsed = dt.datetime.fromisoformat(candidate)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=TZ)
+            return parsed
+        except ValueError:
+            pass
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return dt.datetime.strptime(text[:19], fmt).replace(tzinfo=TZ)
+        except ValueError:
+            pass
+    return None
+
+
+def _life_state_is_fresh(state_updated_at: float | None, *, now: dt.datetime, settings: dict) -> bool:
+    if state_updated_at is None:
+        return False
+    state_time = dt.datetime.fromtimestamp(state_updated_at, tz=TZ)
+    life_settings = (settings or {}).get("life") or {}
+    interval_hours = _clamp_int(life_settings.get("updateIntervalHours"), default=1, minimum=1, maximum=6)
+    freshness_window = min(dt.timedelta(hours=interval_hours, minutes=30), dt.timedelta(minutes=90))
+    return now - state_time <= freshness_window
+
+
+def _age_text(timestamp: float | None, *, now: dt.datetime) -> str:
+    if timestamp is None:
+        return ""
+    updated = dt.datetime.fromtimestamp(timestamp, tz=TZ)
+    delta = max(dt.timedelta(), now - updated)
+    if delta < dt.timedelta(minutes=1):
+        return "刚刚"
+    minutes = int(delta.total_seconds() // 60)
+    if minutes < 60:
+        return f"{minutes} 分钟前 {updated.strftime('%H:%M')}"
+    hours, remainder = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours} 小时 {remainder} 分钟前 {updated.strftime('%H:%M')}"
+    days, hours = divmod(hours, 24)
+    return f"{days} 天 {hours} 小时前 {updated.strftime('%m-%d %H:%M')}"
 
 
 def _clamp_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
