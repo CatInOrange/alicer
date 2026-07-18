@@ -625,6 +625,79 @@ class ProactiveSettings {
   }
 }
 
+class DailyMaintenanceSettings {
+  const DailyMaintenanceSettings({
+    this.enabled = true,
+    this.runTime = '03:30',
+    this.target = 'yesterday',
+    this.generateDiary = true,
+    this.cleanupFacts = true,
+    this.processMemory = true,
+    this.advanceLife = true,
+    this.consistencyCheck = true,
+  });
+
+  final bool enabled;
+  final String runTime;
+  final String target;
+  final bool generateDiary;
+  final bool cleanupFacts;
+  final bool processMemory;
+  final bool advanceLife;
+  final bool consistencyCheck;
+
+  factory DailyMaintenanceSettings.fromJson(Map<String, dynamic> json) {
+    final rawTarget = (json['target'] ?? 'yesterday').toString();
+    return DailyMaintenanceSettings(
+      enabled: json['enabled'] != false,
+      runTime: _normalizeClock(
+        (json['runTime'] ?? '03:30').toString(),
+        '03:30',
+      ),
+      target: rawTarget == 'today' ? 'today' : 'yesterday',
+      generateDiary: json['generateDiary'] != false,
+      cleanupFacts: json['cleanupFacts'] != false,
+      processMemory: json['processMemory'] != false,
+      advanceLife: json['advanceLife'] != false,
+      consistencyCheck: json['consistencyCheck'] != false,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'runTime': runTime,
+    'target': target,
+    'generateDiary': generateDiary,
+    'cleanupFacts': cleanupFacts,
+    'processMemory': processMemory,
+    'advanceLife': advanceLife,
+    'consistencyCheck': consistencyCheck,
+  };
+
+  DailyMaintenanceSettings copyWith({
+    bool? enabled,
+    String? runTime,
+    String? target,
+    bool? generateDiary,
+    bool? cleanupFacts,
+    bool? processMemory,
+    bool? advanceLife,
+    bool? consistencyCheck,
+  }) {
+    final nextTarget = target ?? this.target;
+    return DailyMaintenanceSettings(
+      enabled: enabled ?? this.enabled,
+      runTime: _normalizeClock(runTime ?? this.runTime, this.runTime),
+      target: nextTarget == 'today' ? 'today' : 'yesterday',
+      generateDiary: generateDiary ?? this.generateDiary,
+      cleanupFacts: cleanupFacts ?? this.cleanupFacts,
+      processMemory: processMemory ?? this.processMemory,
+      advanceLife: advanceLife ?? this.advanceLife,
+      consistencyCheck: consistencyCheck ?? this.consistencyCheck,
+    );
+  }
+}
+
 String normalizeHistoryMode(String value) {
   return switch (value) {
     'recent' || 'day' || 'month' || 'all' => value,
@@ -756,6 +829,7 @@ class AlicerSettings {
     this.userTimeline = const UserTimelineSettings(),
     this.chatPhotos = const ChatPhotoSettings(),
     this.proactive = const ProactiveSettings(),
+    this.dailyMaintenance = const DailyMaintenanceSettings(),
     this.model = const ModelSettings(),
   });
 
@@ -771,6 +845,7 @@ class AlicerSettings {
   final UserTimelineSettings userTimeline;
   final ChatPhotoSettings chatPhotos;
   final ProactiveSettings proactive;
+  final DailyMaintenanceSettings dailyMaintenance;
   final ModelSettings model;
 
   factory AlicerSettings.fromJson(Map<String, dynamic> json) {
@@ -812,6 +887,11 @@ class AlicerSettings {
       proactive: ProactiveSettings.fromJson(
         Map<String, dynamic>.from((json['proactive'] as Map?) ?? const {}),
       ),
+      dailyMaintenance: DailyMaintenanceSettings.fromJson(
+        Map<String, dynamic>.from(
+          (json['dailyMaintenance'] as Map?) ?? const {},
+        ),
+      ),
       model: ModelSettings.fromJson(
         Map<String, dynamic>.from((json['model'] as Map?) ?? const {}),
       ),
@@ -831,6 +911,7 @@ class AlicerSettings {
     'userTimeline': userTimeline.toJson(),
     'chatPhotos': chatPhotos.toJson(),
     'proactive': proactive.toJson(),
+    'dailyMaintenance': dailyMaintenance.toJson(),
     'model': model.toJson(),
   };
 
@@ -845,6 +926,7 @@ class AlicerSettings {
     'userTimeline': userTimeline.toJson(),
     'chatPhotos': chatPhotos.toJson(),
     'proactive': proactive.toJson(),
+    'dailyMaintenance': dailyMaintenance.toJson(),
     'model': model.toJson(),
   };
 
@@ -861,6 +943,7 @@ class AlicerSettings {
     UserTimelineSettings? userTimeline,
     ChatPhotoSettings? chatPhotos,
     ProactiveSettings? proactive,
+    DailyMaintenanceSettings? dailyMaintenance,
     ModelSettings? model,
   }) {
     return AlicerSettings(
@@ -876,6 +959,7 @@ class AlicerSettings {
       userTimeline: userTimeline ?? this.userTimeline,
       chatPhotos: chatPhotos ?? this.chatPhotos,
       proactive: proactive ?? this.proactive,
+      dailyMaintenance: dailyMaintenance ?? this.dailyMaintenance,
       model: model ?? this.model,
     );
   }

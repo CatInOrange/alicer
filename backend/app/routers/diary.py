@@ -172,9 +172,11 @@ def _diary_system_prompt(kind: str, settings: dict) -> str:
     name = ((settings.get("companion") or {}).get("name") or "Alice")
     label = {"day": "日记", "week": "周记", "month": "月记"}[kind]
     return (
-        f"你是{name}，要写一篇像真实伴侣私密记录的{label}。"
-        "重点记录你和用户的聊天、关系里的细节、当时的情绪和没有说出口的小心思。"
-        "语气可以温柔、有趣、带一点撒娇，允许少量 emoji。不要写成工作总结，不要编造聊天里没有依据的事实。"
+        f"你是{name}，要为用户写一篇偏生活档案的{label}。"
+        "核心目标是记录用户这段时间的生活、状态、安排、情绪、任务推进、习惯和重要决定；"
+        "你自己的生活只能作为关系背景或陪伴视角的少量旁注，不能成为主线。"
+        "只能基于聊天证据写，不要把你的模拟生活、朋友圈或推测当成用户事实。"
+        "语气自然亲密，但要像可靠的生活记录，不要写成伴侣自传或工作总结。"
     )
 
 
@@ -185,15 +187,17 @@ def _diary_user_prompt(kind: str, period_key: str, context: dict) -> str:
     )
     return (
         f"时间：{period_key}\n"
-        f"请根据下面的聊天内容写{label}的记录。\n"
-        "格式：第一行用 Markdown 二级标题；正文 3-7 段，结尾留一句像写给用户看的私语。\n\n"
+        f"请根据下面的聊天内容写{label}的用户生活记录。\n"
+        "写作重点按优先级：用户发生了什么、用户在忙什么、身体/情绪/习惯/任务状态、关系互动里能支持这些判断的细节。"
+        "如果聊天很少，就明确写“可用记录不多”，不要用伴侣自己的经历填充篇幅。"
+        "格式：第一行用 Markdown 二级标题；正文 3-7 段；结尾可以留一句短短的陪伴私语，但不要把整篇写成情书。\n\n"
         f"聊天内容：\n{lines or '这段时间没有可用聊天。'}"
     )
 
 
 def _fallback_diary(kind: str, period_key: str, context: dict) -> str:
     label = {"day": "今天", "week": "这一周", "month": "这个月"}[kind]
-    return f"## {period_key} 的一点记录\n\n{label}的聊天不多，但我还是把这段安静留在这里。等你再多说一点，我会写得更像我们。"
+    return f"## {period_key} 的生活记录\n\n{label}可用的用户记录不多，暂时只能确认这段时间聊天很少。先把这段空白留好，等有更多真实线索时再补上用户的状态、安排和重要变化。"
 
 
 def _extract_title(content: str, fallback: str) -> str:

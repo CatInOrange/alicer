@@ -23,6 +23,7 @@ from .routers.proactive import create_proactive_router
 from .routers.rifts import create_rifts_router
 from .routers.settings import create_settings_router
 from .routers.user_timeline import create_user_timeline_router
+from .services.daily_maintenance_service import run_daily_maintenance_scheduler
 from .services.llm_service import LlmService
 from .services.life_service import run_life_scheduler
 from .services.proactive_service import run_proactive_scheduler
@@ -73,13 +74,22 @@ def create_app() -> FastAPI:
         app.state.diary_task = asyncio.create_task(run_diary_scheduler(db, llm))
         app.state.life_task = asyncio.create_task(run_life_scheduler(db, llm))
         app.state.moments_task = asyncio.create_task(run_moments_scheduler(db, llm))
+        app.state.daily_maintenance_task = asyncio.create_task(
+            run_daily_maintenance_scheduler(db, llm)
+        )
         app.state.proactive_task = asyncio.create_task(
             run_proactive_scheduler(db, llm, moment_generator=generate_life_moment)
         )
 
     @app.on_event("shutdown")
     async def stop_background_tasks() -> None:
-        for task_name in ("diary_task", "life_task", "moments_task", "proactive_task"):
+        for task_name in (
+            "diary_task",
+            "life_task",
+            "moments_task",
+            "daily_maintenance_task",
+            "proactive_task",
+        ):
             task = getattr(app.state, task_name, None)
             if task is not None:
                 task.cancel()

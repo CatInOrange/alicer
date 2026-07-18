@@ -706,8 +706,94 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             _CollapsiblePanel(
+              icon: Icons.task_alt_outlined,
+              title: '08 日终维护引擎',
+              subtitle: '每天固定整理日记、事实账本、记忆队列和生活状态健康检查。',
+              child: Column(
+                children: [
+                  _SwitchRow(
+                    icon: Icons.play_circle_outline_rounded,
+                    title: '启用日终维护',
+                    subtitle: '开启后后端每天自动执行一次整理任务。',
+                    value: _settings.dailyMaintenance.enabled,
+                    onChanged:
+                        (value) => _setDailyMaintenance(
+                          _settings.dailyMaintenance.copyWith(enabled: value),
+                        ),
+                  ),
+                  _ActionRow(
+                    icon: Icons.schedule_outlined,
+                    title: '运行时间',
+                    subtitle:
+                        '${_settings.dailyMaintenance.runTime} · 默认整理昨天的数据。',
+                    onTap: null,
+                  ),
+                  _SwitchRow(
+                    icon: Icons.auto_stories_outlined,
+                    title: '生成日记',
+                    subtitle: '补生成日记、周记和月记；已有记录不会重复覆盖。',
+                    value: _settings.dailyMaintenance.generateDiary,
+                    onChanged:
+                        (value) => _setDailyMaintenance(
+                          _settings.dailyMaintenance.copyWith(
+                            generateDiary: value,
+                          ),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.fact_check_outlined,
+                    title: '整理事实',
+                    subtitle: '自动完成、过期、去重并沉淀高价值事实。',
+                    value: _settings.dailyMaintenance.cleanupFacts,
+                    onChanged:
+                        (value) => _setDailyMaintenance(
+                          _settings.dailyMaintenance.copyWith(
+                            cleanupFacts: value,
+                          ),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.memory_rounded,
+                    title: '处理记忆队列',
+                    subtitle: '把待处理聊天片段提炼成长期记忆候选。',
+                    value: _settings.dailyMaintenance.processMemory,
+                    onChanged:
+                        (value) => _setDailyMaintenance(
+                          _settings.dailyMaintenance.copyWith(
+                            processMemory: value,
+                          ),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.timeline_outlined,
+                    title: '检查生活推进',
+                    subtitle: '维护时补一次生活状态，并在账本里记录健康摘要。',
+                    value: _settings.dailyMaintenance.advanceLife,
+                    onChanged:
+                        (value) => _setDailyMaintenance(
+                          _settings.dailyMaintenance.copyWith(
+                            advanceLife: value,
+                          ),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.rule_folder_outlined,
+                    title: '一致性检查',
+                    subtitle: '审计日记、事实、记忆队列和生活状态是否存在断层或冲突。',
+                    value: _settings.dailyMaintenance.consistencyCheck,
+                    onChanged:
+                        (value) => _setDailyMaintenance(
+                          _settings.dailyMaintenance.copyWith(
+                            consistencyCheck: value,
+                          ),
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            _CollapsiblePanel(
               icon: Icons.photo_camera_back_outlined,
-              title: '08 聊天照片引擎',
+              title: '09 聊天照片引擎',
               subtitle: '处理聊天里的照片请求、主动生活照和每日生成额度。',
               child: Column(
                 children: [
@@ -1033,6 +1119,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _setProactive(ProactiveSettings proactive) {
     setState(() => _settings = _settings.copyWith(proactive: proactive));
+    unawaited(SettingsStore.save(_settings));
+  }
+
+  void _setDailyMaintenance(DailyMaintenanceSettings dailyMaintenance) {
+    setState(
+      () => _settings = _settings.copyWith(dailyMaintenance: dailyMaintenance),
+    );
     unawaited(SettingsStore.save(_settings));
   }
 

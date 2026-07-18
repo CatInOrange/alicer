@@ -133,6 +133,16 @@ DEFAULT_SETTINGS: dict = {
         "chatThreshold": 0.66,
         "momentThreshold": 0.68,
     },
+    "dailyMaintenance": {
+        "enabled": True,
+        "runTime": "03:30",
+        "target": "yesterday",
+        "generateDiary": True,
+        "cleanupFacts": True,
+        "processMemory": True,
+        "advanceLife": True,
+        "consistencyCheck": True,
+    },
     "model": {
         "provider": "deepseek",
         "model": "deepseek-v4-flash",
