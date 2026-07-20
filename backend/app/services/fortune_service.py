@@ -247,13 +247,13 @@ def _summarize(signals: list[dict]) -> dict:
             "avoid": ["把普通波动解读成重大预兆"],
         }
     score = round(sum(float(item["score"]) for item in signals[:6]), 2)
-    strongest = signals[0]
     topic_scores: dict[str, float] = {}
     for item in signals[:8]:
         for topic in item.get("topics") or []:
             topic_scores[topic] = topic_scores.get(topic, 0.0) + float(item["score"])
     main_topic = max(topic_scores.items(), key=lambda item: abs(item[1]))[0] if topic_scores else "state"
     overall = "supportive" if score >= 1.2 else "challenging" if score <= -1.2 else "mixed"
+    strongest = _representative_signal(signals, overall)
     theme = _theme(main_topic, overall)
     return {
         "overall": overall,
@@ -428,6 +428,18 @@ def _headline(overall: str, strongest: dict) -> str:
     if overall == "challenging":
         return f"今天{planet}{aspect}本命{target}让节奏偏紧，先别急着赢，稳住会更好。"
     return f"今天{planet}{aspect}本命{target}让主题被放大，有助力也有摩擦，适合边走边调。"
+
+
+def _representative_signal(signals: list[dict], overall: str) -> dict:
+    if overall == "challenging":
+        for item in signals:
+            if item.get("polarity") == "challenging":
+                return item
+    if overall == "supportive":
+        for item in signals:
+            if item.get("polarity") == "supportive":
+                return item
+    return signals[0]
 
 
 def _transit_topics(planet: str) -> tuple[str, ...]:
