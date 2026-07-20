@@ -33,6 +33,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _companionNameController = TextEditingController();
   final _userNameController = TextEditingController();
   final _maxTokensController = TextEditingController();
+  final _fortuneBirthdayController = TextEditingController();
 
   AlicerSettings _settings = const AlicerSettings();
   bool _isLoading = true;
@@ -51,12 +52,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _lifeStatus = '尚未读取';
   String _lifeFactsStatus = '尚未读取';
   String _userTimelineStatus = '尚未读取';
+  String _fortuneStatus = '尚未计算';
   Map<String, dynamic>? _lifeContext;
   List<Map<String, dynamic>> _lifeEvents = const [];
   List<Map<String, dynamic>> _lifeFacts = const [];
   Map<String, dynamic>? _lifeFactAudit;
   Map<String, dynamic>? _userTimelineContext;
   List<Map<String, dynamic>> _userTimelineEvents = const [];
+  Map<String, dynamic>? _fortunePreview;
 
   @override
   void initState() {
@@ -71,6 +74,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _companionNameController.dispose();
     _userNameController.dispose();
     _maxTokensController.dispose();
+    _fortuneBirthdayController.dispose();
     super.dispose();
   }
 
@@ -93,6 +97,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _companionNameController.text = settings.companion.name;
     _userNameController.text = settings.companion.userName;
     _maxTokensController.text = settings.model.maxTokens.toString();
+    _fortuneBirthdayController.text = settings.fortune.birthday;
   }
 
   @override
@@ -368,8 +373,92 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             _CollapsiblePanel(
+              icon: Icons.auto_awesome_outlined,
+              title: '04 每日运势引擎',
+              subtitle: '用用户生日和当天行星行运生成今日提醒；只作娱乐和自我观察，伴侣会克制提起。',
+              child: Column(
+                children: [
+                  _SwitchRow(
+                    icon: Icons.wb_twilight_outlined,
+                    title: '启用今日运势',
+                    subtitle: '开启后在运行上下文里注入一条短版今日主题。',
+                    value: _settings.fortune.enabled,
+                    onChanged:
+                        (value) => _setFortune(
+                          _settings.fortune.copyWith(enabled: value),
+                        ),
+                  ),
+                  TextField(
+                    controller: _fortuneBirthdayController,
+                    keyboardType: TextInputType.datetime,
+                    decoration: const InputDecoration(
+                      labelText: '用户生日',
+                      helperText: '格式：YYYY-MM-DD；不需要出生时辰。',
+                    ),
+                    onChanged:
+                        (value) => _setFortune(
+                          _settings.fortune.copyWith(birthday: value.trim()),
+                        ),
+                  ),
+                  const SizedBox(height: 8),
+                  _FortuneStyleRow(
+                    value: _settings.fortune.style,
+                    onChanged:
+                        (value) => _setFortune(
+                          _settings.fortune.copyWith(style: value),
+                        ),
+                  ),
+                  _SwitchRow(
+                    icon: Icons.account_tree_outlined,
+                    title: '注入上下文',
+                    subtitle: '关闭后只保留配置和手动预览，不影响聊天。',
+                    value: _settings.fortune.includeInContext,
+                    onChanged:
+                        (value) => _setFortune(
+                          _settings.fortune.copyWith(includeInContext: value),
+                        ),
+                  ),
+                  _IntSliderRow(
+                    icon: Icons.volume_down_outlined,
+                    title: '每日主动提及上限',
+                    subtitle:
+                        '每天最多自然主动提 ${_settings.fortune.maxProactiveMentionsPerDay} 次；用户主动问不受限。',
+                    value: _settings.fortune.maxProactiveMentionsPerDay,
+                    min: 0,
+                    max: 3,
+                    divisions: 3,
+                    onChanged:
+                        (value) => _setFortune(
+                          _settings.fortune.copyWith(
+                            maxProactiveMentionsPerDay: value,
+                          ),
+                        ),
+                  ),
+                  _SliderRow(
+                    icon: Icons.radar_outlined,
+                    title: '相位容许度',
+                    subtitle:
+                        '${_settings.fortune.orbDegrees.toStringAsFixed(1)}° · 越小越严格，越大越容易命中相位。',
+                    value: (_settings.fortune.orbDegrees - 1.0) / 5.0,
+                    onChanged:
+                        (value) => _setFortune(
+                          _settings.fortune.copyWith(
+                            orbDegrees: 1.0 + value * 5.0,
+                          ),
+                        ),
+                  ),
+                  const Divider(height: 26),
+                  _FortunePreviewPanel(
+                    status: _fortuneStatus,
+                    fortune: _fortunePreview,
+                    onRefresh: _previewFortune,
+                  ),
+                ],
+              ),
+            ),
+            _CollapsiblePanel(
               icon: Icons.timeline_outlined,
-              title: '04 生活模拟引擎',
+              title: '05 生活模拟引擎',
               subtitle: '后台推进她自己的活动、地点、心情和日计划；聊天、朋友圈和主动行为共享同一生活状态。',
               child: Column(
                 children: [
@@ -448,7 +537,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.memory_rounded,
-              title: '05 上下文引擎',
+              title: '06 上下文引擎',
               subtitle: '汇总事实账本、生活状态、用户轨迹、环境、记忆和聊天历史，决定每次生成能看到什么。',
               child: Column(
                 children: [
@@ -536,7 +625,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.auto_awesome_outlined,
-              title: '06 提示词引擎',
+              title: '07 提示词引擎',
               subtitle: '在上下文引擎之后渲染人设、风格和运行上下文模板；不负责自行判断事实。',
               trailing: FilledButton.icon(
                 onPressed: _showPromptPreview,
@@ -571,7 +660,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.volunteer_activism_outlined,
-              title: '07 主动引擎',
+              title: '08 主动引擎',
               subtitle: '基于生活模拟、事实账本和用户轨迹打分，决定是否主动聊天或发布朋友圈。',
               child: Column(
                 children: [
@@ -707,7 +796,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.task_alt_outlined,
-              title: '08 日终维护引擎',
+              title: '09 日终维护引擎',
               subtitle: '每天固定整理日记、事实账本、记忆队列和生活状态健康检查。',
               child: Column(
                 children: [
@@ -793,7 +882,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.photo_camera_back_outlined,
-              title: '09 聊天照片引擎',
+              title: '10 聊天照片引擎',
               subtitle: '处理聊天里的照片请求、主动生活照和每日生成额度。',
               child: Column(
                 children: [
@@ -864,7 +953,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.photo_camera_back_outlined,
-              title: '09 朋友圈引擎',
+              title: '11 朋友圈引擎',
               subtitle: '生成朋友圈正文、评论回复和配图；主动发布由主动引擎触发。',
               child: Column(
                 children: [
@@ -921,7 +1010,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _CollapsiblePanel(
               icon: Icons.hub_outlined,
-              title: '10 运行时与模型',
+              title: '12 运行时与模型',
               subtitle: 'Alicer 后端地址、管理口令、DeepSeek 模型和生成参数。',
               child: Column(
                 children: [
@@ -1112,6 +1201,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     unawaited(_userTimelineService.configureBackground(_settings));
   }
 
+  void _setFortune(FortuneSettings fortune) {
+    setState(() => _settings = _settings.copyWith(fortune: fortune));
+    unawaited(SettingsStore.save(_settings));
+  }
+
   void _setChatPhotos(ChatPhotoSettings chatPhotos) {
     setState(() => _settings = _settings.copyWith(chatPhotos: chatPhotos));
     unawaited(SettingsStore.save(_settings));
@@ -1209,6 +1303,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       },
     );
+  }
+
+  Future<void> _previewFortune() async {
+    final fortune = _settings.fortune.copyWith(
+      birthday: _fortuneBirthdayController.text.trim(),
+    );
+    final next = _settings.copyWith(fortune: fortune);
+    setState(() {
+      _settings = next;
+      _fortuneStatus = '计算中…';
+      _fortunePreview = null;
+    });
+    await SettingsStore.save(next);
+    try {
+      final response = await ChatRepository(settings: next).previewFortune();
+      if (!mounted) return;
+      setState(() {
+        _fortunePreview = Map<String, dynamic>.from(
+          (response['fortune'] as Map?) ?? const {},
+        );
+        final summary = (_fortunePreview?['summary'] as Map?) ?? const {};
+        _fortuneStatus =
+            summary['theme'] == null
+                ? (_fortunePreview?['reason'] ?? '没有可用结果').toString()
+                : '今日主题：${summary['theme']}';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _fortuneStatus = '计算失败：$error');
+    }
   }
 
   String _localPromptPreview() {
@@ -3380,6 +3504,144 @@ class _HistoryModeRow extends StatelessWidget {
               },
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FortuneStyleRow extends StatelessWidget {
+  const _FortuneStyleRow({required this.value, required this.onChanged});
+
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Icon(
+              Icons.palette_outlined,
+              color: context.alicerColors.textMuted,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: DropdownButtonFormField<String>(
+              value: normalizeFortuneStyle(value),
+              decoration: const InputDecoration(
+                labelText: '表达风格',
+                helperText: '只影响伴侣转述，不改变吉凶判断。',
+              ),
+              items: const [
+                DropdownMenuItem(value: 'companion', child: Text('伴侣日签')),
+                DropdownMenuItem(value: 'quiet', child: Text('克制提醒')),
+                DropdownMenuItem(value: 'classic', child: Text('经典占星')),
+              ],
+              onChanged: (next) {
+                if (next != null) onChanged(next);
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FortunePreviewPanel extends StatelessWidget {
+  const _FortunePreviewPanel({
+    required this.status,
+    required this.fortune,
+    required this.onRefresh,
+  });
+
+  final String status;
+  final Map<String, dynamic>? fortune;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = Map<String, dynamic>.from(
+      (fortune?['summary'] as Map?) ?? const {},
+    );
+    final signals = ((fortune?['signals'] as List?) ?? const <dynamic>[])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: false);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text(status)),
+            TextButton.icon(
+              onPressed: onRefresh,
+              icon: const Icon(Icons.auto_awesome_outlined, size: 18),
+              label: const Text('计算今日'),
+            ),
+          ],
+        ),
+        if (summary.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          _MiniInfoBox(
+            title: (summary['theme'] ?? '今日运势').toString(),
+            body: [
+              (summary['headline'] ?? '').toString(),
+              if ((summary['love'] ?? '').toString().isNotEmpty)
+                '感情：${summary['love']}',
+              if ((summary['work'] ?? '').toString().isNotEmpty)
+                '工作：${summary['work']}',
+              if ((summary['emotion'] ?? '').toString().isNotEmpty)
+                '情绪：${summary['emotion']}',
+            ].where((item) => item.trim().isNotEmpty).join('\n'),
+          ),
+        ],
+        if (signals.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Text('证据链', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 6),
+          for (final signal in signals.take(4))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                '• ${signal['transitPlanetLabel']}${signal['aspectLabel']}本命${signal['natalPlanetLabel']} · orb ${signal['orb']}° · ${signal['polarity']}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+        ],
+      ],
+    );
+  }
+}
+
+class _MiniInfoBox extends StatelessWidget {
+  const _MiniInfoBox({required this.title, required this.body});
+
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: context.alicerColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 6),
+          Text(body, style: Theme.of(context).textTheme.bodySmall),
         ],
       ),
     );

@@ -15,6 +15,7 @@ from .config import get_settings
 from .db import Database
 from .routers.chat import create_chat_router
 from .routers.diary import create_diary_router, run_diary_scheduler
+from .routers.fortune import create_fortune_router
 from .routers.life import create_life_router
 from .routers.memories import create_memories_router
 from .routers.moments import create_moments_router
@@ -60,6 +61,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(create_settings_router(db))
     app.include_router(create_chat_router(db, llm))
+    app.include_router(create_fortune_router(db))
     app.include_router(create_diary_router(db, llm))
     app.include_router(create_life_router(db, llm))
     app.include_router(create_user_timeline_router(db))

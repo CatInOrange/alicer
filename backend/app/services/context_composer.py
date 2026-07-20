@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime as dt
 from zoneinfo import ZoneInfo
 
+from .fortune_service import build_daily_fortune_context
+
 
 RECENT_HISTORY_COUNT = 20
 RECENT_HISTORY_CHAR_BUDGET = 12_000
@@ -39,6 +41,7 @@ def compose_prompt_context(
     world_trajectory = _format_world_trajectory(life_context)
     world_user = _format_user_context(user_context)
     world_photos = _format_chat_photo_context(photo_context)
+    world_fortune = _format_fortune_context(build_daily_fortune_context(settings, date=now.date()))
     world_memory = long_term or "暂无长期记忆。"
     world_guardrails = _format_world_guardrails(world_context)
     world_legacy = _format_world_context(world_context)
@@ -53,6 +56,7 @@ def compose_prompt_context(
         trajectory=world_trajectory,
         user=world_user,
         photos=world_photos,
+        fortune=world_fortune,
         history_older=history_older,
         history_recent=history_recent,
         memory=world_memory,
@@ -74,6 +78,7 @@ def compose_prompt_context(
         "world.trajectory": world_trajectory,
         "world.user": world_user,
         "world.photos": world_photos,
+        "world.fortune": world_fortune,
         "world.memory": world_memory,
         "world.guardrails": world_guardrails,
         "context.freshness": projection_freshness,
@@ -99,6 +104,7 @@ def compose_prompt_context(
                 "trajectory": world_trajectory,
                 "user": world_user,
                 "photos": world_photos,
+                "fortune": world_fortune,
                 "memory": world_memory,
                 "guardrails": world_guardrails,
             },
@@ -125,6 +131,7 @@ def _format_context_brief(
     trajectory: str,
     user: str,
     photos: str,
+    fortune: str,
     history_older: str,
     history_recent: str,
     memory: str,
@@ -137,6 +144,7 @@ def _format_context_brief(
         ("Alicer 未来时间线", future),
         ("未完成承诺、计划和稳定事实", commitments),
         ("用户现实线索", user),
+        ("今日个人化运势", fortune),
         ("照片/自拍连续性", photos),
         ("Alicer 最近生活轨迹", trajectory),
         ("最近 20 条聊天", history_recent),
@@ -554,6 +562,17 @@ def _format_world_context(world_context: dict) -> str:
     lines.extend(_fact_line(item) for item in facts[:12])
     lines.append("聊天、朋友圈和生活模拟都必须优先服从这些事实；不要安排冲突的地点、工作、行程或承诺。")
     return "\n".join(lines)
+
+
+def _format_fortune_context(fortune_context: dict) -> str:
+    if not fortune_context.get("enabled"):
+        return ""
+    if not fortune_context.get("configured"):
+        return "今日运势引擎已开启，但还没有配置用户生日；不要主动提运势。"
+    prompt = str(fortune_context.get("prompt") or "").strip()
+    if not prompt:
+        return ""
+    return prompt
 
 
 def _format_world_guardrails(world_context: dict) -> str:

@@ -485,6 +485,79 @@ class ChatPhotoSettings {
   }
 }
 
+class FortuneSettings {
+  const FortuneSettings({
+    this.enabled = false,
+    this.birthday = '',
+    this.style = 'companion',
+    this.includeInContext = true,
+    this.maxProactiveMentionsPerDay = 1,
+    this.orbDegrees = 3.0,
+  });
+
+  final bool enabled;
+  final String birthday;
+  final String style;
+  final bool includeInContext;
+  final int maxProactiveMentionsPerDay;
+  final double orbDegrees;
+
+  factory FortuneSettings.fromJson(Map<String, dynamic> json) {
+    return FortuneSettings(
+      enabled: json['enabled'] == true,
+      birthday: (json['birthday'] ?? '').toString(),
+      style: normalizeFortuneStyle((json['style'] ?? 'companion').toString()),
+      includeInContext: json['includeInContext'] != false,
+      maxProactiveMentionsPerDay: _clampInt(
+        json['maxProactiveMentionsPerDay'],
+        1,
+        0,
+        3,
+      ),
+      orbDegrees: _clampDouble(json['orbDegrees'], 3.0, 1.0, 6.0),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'birthday': birthday,
+    'style': style,
+    'includeInContext': includeInContext,
+    'maxProactiveMentionsPerDay': maxProactiveMentionsPerDay,
+    'orbDegrees': orbDegrees,
+  };
+
+  FortuneSettings copyWith({
+    bool? enabled,
+    String? birthday,
+    String? style,
+    bool? includeInContext,
+    int? maxProactiveMentionsPerDay,
+    double? orbDegrees,
+  }) {
+    return FortuneSettings(
+      enabled: enabled ?? this.enabled,
+      birthday: birthday ?? this.birthday,
+      style: style == null ? this.style : normalizeFortuneStyle(style),
+      includeInContext: includeInContext ?? this.includeInContext,
+      maxProactiveMentionsPerDay: _clampInt(
+        maxProactiveMentionsPerDay,
+        this.maxProactiveMentionsPerDay,
+        0,
+        3,
+      ),
+      orbDegrees: _clampDouble(orbDegrees, this.orbDegrees, 1.0, 6.0),
+    );
+  }
+}
+
+String normalizeFortuneStyle(String value) {
+  return switch (value) {
+    'classic' || 'quiet' || 'companion' => value,
+    _ => 'companion',
+  };
+}
+
 class ProactiveQuietHours {
   const ProactiveQuietHours({this.start = '23:30', this.end = '08:00'});
 
@@ -827,6 +900,7 @@ class AlicerSettings {
     this.moments = const MomentsSettings(),
     this.life = const LifeSettings(),
     this.userTimeline = const UserTimelineSettings(),
+    this.fortune = const FortuneSettings(),
     this.chatPhotos = const ChatPhotoSettings(),
     this.proactive = const ProactiveSettings(),
     this.dailyMaintenance = const DailyMaintenanceSettings(),
@@ -843,6 +917,7 @@ class AlicerSettings {
   final MomentsSettings moments;
   final LifeSettings life;
   final UserTimelineSettings userTimeline;
+  final FortuneSettings fortune;
   final ChatPhotoSettings chatPhotos;
   final ProactiveSettings proactive;
   final DailyMaintenanceSettings dailyMaintenance;
@@ -881,6 +956,9 @@ class AlicerSettings {
       userTimeline: UserTimelineSettings.fromJson(
         Map<String, dynamic>.from((json['userTimeline'] as Map?) ?? const {}),
       ),
+      fortune: FortuneSettings.fromJson(
+        Map<String, dynamic>.from((json['fortune'] as Map?) ?? const {}),
+      ),
       chatPhotos: ChatPhotoSettings.fromJson(
         Map<String, dynamic>.from((json['chatPhotos'] as Map?) ?? const {}),
       ),
@@ -909,6 +987,7 @@ class AlicerSettings {
     'moments': moments.toJson(),
     'life': life.toJson(),
     'userTimeline': userTimeline.toJson(),
+    'fortune': fortune.toJson(),
     'chatPhotos': chatPhotos.toJson(),
     'proactive': proactive.toJson(),
     'dailyMaintenance': dailyMaintenance.toJson(),
@@ -924,6 +1003,7 @@ class AlicerSettings {
     'moments': moments.toJson(),
     'life': life.toJson(),
     'userTimeline': userTimeline.toJson(),
+    'fortune': fortune.toJson(),
     'chatPhotos': chatPhotos.toJson(),
     'proactive': proactive.toJson(),
     'dailyMaintenance': dailyMaintenance.toJson(),
@@ -941,6 +1021,7 @@ class AlicerSettings {
     MomentsSettings? moments,
     LifeSettings? life,
     UserTimelineSettings? userTimeline,
+    FortuneSettings? fortune,
     ChatPhotoSettings? chatPhotos,
     ProactiveSettings? proactive,
     DailyMaintenanceSettings? dailyMaintenance,
@@ -957,6 +1038,7 @@ class AlicerSettings {
       moments: moments ?? this.moments,
       life: life ?? this.life,
       userTimeline: userTimeline ?? this.userTimeline,
+      fortune: fortune ?? this.fortune,
       chatPhotos: chatPhotos ?? this.chatPhotos,
       proactive: proactive ?? this.proactive,
       dailyMaintenance: dailyMaintenance ?? this.dailyMaintenance,

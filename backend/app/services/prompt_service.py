@@ -29,6 +29,7 @@ def merge_settings(stored: dict | None) -> dict:
         "moments",
         "life",
         "userTimeline",
+        "fortune",
         "chatPhotos",
         "proactive",
         "dailyMaintenance",

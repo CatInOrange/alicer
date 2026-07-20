@@ -111,6 +111,14 @@ DEFAULT_SETTINGS: dict = {
         "retentionDays": 2,
         "syncIntervalMinutes": 30,
     },
+    "fortune": {
+        "enabled": False,
+        "birthday": "",
+        "style": "companion",
+        "includeInContext": True,
+        "maxProactiveMentionsPerDay": 1,
+        "orbDegrees": 3.0,
+    },
     "chatPhotos": {
         "enabled": True,
         "allowRequested": True,

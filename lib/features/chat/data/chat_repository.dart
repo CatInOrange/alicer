@@ -87,6 +87,12 @@ class ChatRepository {
     });
   }
 
+  Future<Map<String, dynamic>> previewFortune() {
+    return _client.postJson('/api/fortune/preview', {
+      'settings': settings.toBackendJson(),
+    });
+  }
+
   Future<void> syncSettings() async {
     await _client.putJson('/api/settings', settings.toBackendJson());
   }
