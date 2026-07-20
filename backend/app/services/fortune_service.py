@@ -254,6 +254,7 @@ def _summarize(signals: list[dict]) -> dict:
     main_topic = max(topic_scores.items(), key=lambda item: abs(item[1]))[0] if topic_scores else "state"
     overall = "supportive" if score >= 1.2 else "challenging" if score <= -1.2 else "mixed"
     strongest = _representative_signal(signals, overall)
+    evidence_signals = [strongest, *[item for item in signals[:6] if item is not strongest]][:4]
     theme = _theme(main_topic, overall)
     return {
         "overall": overall,
@@ -270,7 +271,7 @@ def _summarize(signals: list[dict]) -> dict:
                 f"{item['transitPlanetLabel']}{item['aspectLabel']}本命{item['natalPlanetLabel']}"
                 f"（orb {item['orb']}°）"
             )
-            for item in signals[:4]
+            for item in evidence_signals
         ],
     }
 
