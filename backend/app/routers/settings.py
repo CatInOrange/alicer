@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from ..db import Database
 from ..services.chat_photo_service import build_chat_photo_context
+from ..services.daily_maintenance_service import get_daily_maintenance_status
 from ..services.life_fact_service import build_world_context
 from ..services.life_service import build_life_context
 from ..services.prompt_service import merge_settings, render_prompt
@@ -21,6 +22,10 @@ def create_settings_router(db: Database) -> APIRouter:
     def put_settings(payload: dict) -> dict:
         saved = db.save_settings(merge_settings(payload))
         return {"settings": saved}
+
+    @router.get("/daily-maintenance/status")
+    def daily_maintenance_status() -> dict:
+        return get_daily_maintenance_status(db)
 
     @router.post("/prompt/preview")
     def preview(payload: dict) -> dict:

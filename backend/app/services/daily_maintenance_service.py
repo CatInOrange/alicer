@@ -22,6 +22,14 @@ JOB_CONSISTENCY_LAST = "daily_maintenance:consistency:last"
 logger = logging.getLogger(__name__)
 
 
+def get_daily_maintenance_status(db: Database) -> dict:
+    return {
+        "lastRun": db.get_scheduled_job(JOB_LAST),
+        "lastConsistency": db.get_scheduled_job(JOB_CONSISTENCY_LAST),
+        "lastError": db.get_scheduled_job(JOB_ERROR),
+    }
+
+
 async def run_daily_maintenance_scheduler(db: Database, llm: LlmService) -> None:
     await _catch_up(db, llm)
     while True:

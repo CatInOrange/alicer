@@ -7,7 +7,11 @@ from pathlib import Path
 
 from app.db import Database
 from app.routers.diary import _diary_system_prompt, _diary_user_prompt
-from app.services.daily_maintenance_service import TZ, run_daily_maintenance_once
+from app.services.daily_maintenance_service import (
+    TZ,
+    get_daily_maintenance_status,
+    run_daily_maintenance_once,
+)
 
 
 class FakeLlm:
@@ -75,6 +79,15 @@ class DailyMaintenanceServiceTest(unittest.IsolatedAsyncioTestCase):
                 "retentionDisposition"
             ],
             "promoted_to_memory",
+        )
+
+        status = get_daily_maintenance_status(self.db)
+        self.assertIsNotNone(status["lastRun"])
+        self.assertIsNotNone(status["lastConsistency"])
+        self.assertIsNone(status["lastError"])
+        self.assertEqual(
+            status["lastConsistency"]["result"]["metrics"]["targetDay"],
+            result["targetDay"],
         )
 
     def test_diary_prompt_prioritizes_user_life_over_companion_life(self) -> None:

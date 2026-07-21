@@ -48,12 +48,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isRefreshingLifeFacts = false;
   bool _isLoadingUserTimeline = false;
   bool _isSyncingUserTimeline = false;
+  bool _isLoadingMaintenanceReport = false;
   String _environmentStatus = '尚未读取';
   String _backendStatus = '未检测';
   String _lifeStatus = '尚未读取';
   String _lifeFactsStatus = '尚未读取';
   String _userTimelineStatus = '尚未读取';
   String _fortuneStatus = '尚未计算';
+  String _maintenanceReportStatus = '尚未读取';
   Map<String, dynamic>? _lifeContext;
   List<Map<String, dynamic>> _lifeEvents = const [];
   List<Map<String, dynamic>> _lifeFacts = const [];
@@ -61,6 +63,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Map<String, dynamic>? _userTimelineContext;
   List<Map<String, dynamic>> _userTimelineEvents = const [];
   Map<String, dynamic>? _fortunePreview;
+  Map<String, dynamic>? _maintenanceReport;
 
   @override
   void initState() {
@@ -88,6 +91,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     unawaited(_loadLifeRecords());
     unawaited(_loadLifeFacts());
     unawaited(_loadUserTimeline());
+    unawaited(_loadMaintenanceReport());
     unawaited(_userTimelineService.configureBackground(settings));
   }
 
@@ -878,6 +882,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ),
                   ),
+                  const Divider(height: 26),
+                  _MaintenanceReportPanel(
+                    report: _maintenanceReport,
+                    status: _maintenanceReportStatus,
+                    isLoading: _isLoadingMaintenanceReport,
+                    onRefresh: _loadMaintenanceReport,
+                  ),
                 ],
               ),
             ),
@@ -1530,6 +1541,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() => _lifeFactsStatus = '读取失败：$error');
     } finally {
       if (mounted) setState(() => _isLoadingLifeFacts = false);
+    }
+  }
+
+  Future<void> _loadMaintenanceReport() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingMaintenanceReport = true;
+      _maintenanceReportStatus = '读取中...';
+    });
+    try {
+      final response = await ApiClient(
+        baseUrl: _currentApiBaseUrl(),
+      ).getJson('/api/daily-maintenance/status');
+      final report = Map<String, dynamic>.from(response);
+      final consistency = Map<String, dynamic>.from(
+        ((report['lastConsistency'] as Map?)?['result'] as Map?) ?? const {},
+      );
+      final checks = ((consistency['checks'] as List?) ?? const <dynamic>[]);
+      if (!mounted) return;
+      setState(() {
+        _maintenanceReport = report;
+        _maintenanceReportStatus =
+            report['lastRun'] == null
+                ? '尚无日终维护记录'
+                : '已读取审计日报 · ${checks.length} 项检查';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _maintenanceReportStatus = '读取失败：$error');
+    } finally {
+      if (mounted) setState(() => _isLoadingMaintenanceReport = false);
     }
   }
 
@@ -2242,6 +2284,249 @@ class _LifeRecordsPanel extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _MaintenanceReportPanel extends StatelessWidget {
+  const _MaintenanceReportPanel({
+    required this.report,
+    required this.status,
+    required this.isLoading,
+    required this.onRefresh,
+  });
+
+  final Map<String, dynamic>? report;
+  final String status;
+  final bool isLoading;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    final data = report ?? const <String, dynamic>{};
+    final lastRun = Map<String, dynamic>.from(
+      (data['lastRun'] as Map?) ?? const {},
+    );
+    final lastRunResult = Map<String, dynamic>.from(
+      (lastRun['result'] as Map?) ?? const {},
+    );
+    final consistencyJob = Map<String, dynamic>.from(
+      (data['lastConsistency'] as Map?) ?? const {},
+    );
+    final consistency = Map<String, dynamic>.from(
+      (consistencyJob['result'] as Map?) ?? const {},
+    );
+    final metrics = Map<String, dynamic>.from(
+      (consistency['metrics'] as Map?) ?? const {},
+    );
+    final checks = ((consistency['checks'] as List?) ?? const <dynamic>[])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: false);
+    final lastError = Map<String, dynamic>.from(
+      (data['lastError'] as Map?) ?? const {},
+    );
+    final hasReport = lastRun.isNotEmpty || consistency.isNotEmpty;
+    final severity = _readString(consistency, 'severity', fallback: 'unknown');
+    final issueCount = (consistency['issueCount'] ?? 0).toString();
+    final targetDay = _readString(
+      metrics,
+      'targetDay',
+      fallback: _readString(lastRunResult, 'targetDay', fallback: '未记录'),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '审计日报',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            IconButton(
+              tooltip: '刷新',
+              onPressed: isLoading ? null : onRefresh,
+              icon:
+                  isLoading
+                      ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                      : const Icon(Icons.refresh_rounded),
+            ),
+          ],
+        ),
+        Text(status, style: Theme.of(context).textTheme.bodySmall),
+        const SizedBox(height: 10),
+        if (!hasReport)
+          Text('日终维护还没有完成过一次运行。', style: Theme.of(context).textTheme.bodySmall)
+        else ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: colors.surfaceSoft,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: colors.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      _maintenanceSeverityIcon(severity),
+                      color: _maintenanceSeverityColor(context, severity),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _maintenanceSeverityLabel(severity),
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                    ),
+                    Text(
+                      '问题 $issueCount',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _LifeFactChip(label: '目标日期', value: targetDay),
+                    _LifeFactChip(
+                      label: '最近运行',
+                      value: _formatEpochLocal(lastRun['ranAt']),
+                    ),
+                    _LifeFactChip(
+                      label: '来源',
+                      value: _readString(
+                        lastRunResult,
+                        'source',
+                        fallback: '未知',
+                      ),
+                    ),
+                    _LifeFactChip(
+                      label: '处理',
+                      value: lastRunResult['processed'] == false ? '跳过' : '已执行',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _LifeFactChip(
+                      label: '待处理记忆',
+                      value:
+                          (metrics['pendingMemoryQueue'] ??
+                                  ((lastRunResult['health'] as Map?) ??
+                                      const {})['pendingMemoryQueue'] ??
+                                  '0')
+                              .toString(),
+                    ),
+                    _LifeFactChip(
+                      label: '生活状态',
+                      value: _formatIsoLocal(
+                        _readString(metrics, 'lifeStateUpdatedAt'),
+                      ),
+                    ),
+                    _LifeFactChip(
+                      label: '最新轨迹',
+                      value: _formatIsoLocal(
+                        _readString(metrics, 'latestLifeEventAt'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (checks.isEmpty)
+            Text('本次审计没有发现异常。', style: Theme.of(context).textTheme.bodySmall)
+          else
+            _SettingsExpansionSection(
+              icon: Icons.rule_folder_outlined,
+              title: '检查项',
+              subtitle: '${checks.length} 条，可展开查看',
+              initiallyExpanded: true,
+              child: Column(
+                children: [
+                  for (final check in checks.take(40))
+                    _MaintenanceCheckRow(check: check),
+                ],
+              ),
+            ),
+          if (lastError.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _SettingsExpansionSection(
+              icon: Icons.error_outline_rounded,
+              title: '最近错误',
+              subtitle: _formatEpochLocal(lastError['ranAt']),
+              child: SelectableText(
+                _prettyJson(lastError),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
+              ),
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+}
+
+class _MaintenanceCheckRow extends StatelessWidget {
+  const _MaintenanceCheckRow({required this.check});
+
+  final Map<String, dynamic> check;
+
+  @override
+  Widget build(BuildContext context) {
+    final severity = _readString(check, 'severity', fallback: 'info');
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(
+              _maintenanceSeverityIcon(severity),
+              size: 18,
+              color: _maintenanceSeverityColor(context, severity),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _readString(check, 'code', fallback: 'check'),
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _readString(check, 'message', fallback: '无详情'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -3088,6 +3373,68 @@ String _formatEnergy(Object? value) {
           : double.tryParse(value?.toString() ?? '');
   if (number == null) return '未记录';
   return '${(number.clamp(0.0, 1.0) * 100).round()}%';
+}
+
+String _formatEpochLocal(Object? value) {
+  final number =
+      value is num
+          ? value.toDouble()
+          : double.tryParse(value?.toString() ?? '');
+  if (number == null || number <= 0) return '未记录';
+  return _formatDateTimeLocal(
+    DateTime.fromMillisecondsSinceEpoch((number * 1000).round()).toLocal(),
+  );
+}
+
+String _formatIsoLocal(String value) {
+  if (value.trim().isEmpty) return '未记录';
+  final parsed = DateTime.tryParse(value);
+  if (parsed == null) return value;
+  return _formatDateTimeLocal(parsed.toLocal());
+}
+
+String _formatDateTimeLocal(DateTime date) {
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${date.year}-${two(date.month)}-${two(date.day)} '
+      '${two(date.hour)}:${two(date.minute)}';
+}
+
+String _maintenanceSeverityLabel(String severity) {
+  switch (severity) {
+    case 'ok':
+      return '审计正常';
+    case 'warning':
+      return '需要留意';
+    case 'error':
+      return '发现错误';
+    case 'info':
+      return '信息';
+  }
+  return '尚无审计结论';
+}
+
+IconData _maintenanceSeverityIcon(String severity) {
+  switch (severity) {
+    case 'ok':
+      return Icons.check_circle_outline_rounded;
+    case 'warning':
+      return Icons.warning_amber_rounded;
+    case 'error':
+      return Icons.error_outline_rounded;
+  }
+  return Icons.info_outline_rounded;
+}
+
+Color _maintenanceSeverityColor(BuildContext context, String severity) {
+  switch (severity) {
+    case 'ok':
+      return context.alicerColors.userBubble;
+    case 'warning':
+      return Colors.amber.shade800;
+    case 'error':
+      return Theme.of(context).colorScheme.error;
+  }
+  return context.alicerColors.textMuted;
 }
 
 String _weekPlanLabel(String dayType) {
