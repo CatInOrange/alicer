@@ -322,6 +322,14 @@ def _format_future_timeline(*, life_context: dict, world_context: dict) -> str:
         meta = "，".join(item for item in (f"日期 {date}" if date else "", f"来源 {source}" if source else "", f"生成 {generated}" if generated else "") if item)
         if meta or day_theme:
             lines.append("今日计划概况：" + "；".join(item for item in (meta, day_theme) if item))
+    week_plan = life_context.get("weekPlan") or {}
+    week_days = [
+        item for item in (week_plan.get("days") or []) if isinstance(item, dict)
+    ]
+    if week_days:
+        lines.append("周级规划/节律投影：")
+        for item in week_days[:7]:
+            lines.append("  - " + _week_plan_day_line(item))
     next_event, remaining, earlier = _split_plan_events(plan.get("plannedEvents") or [], now=now)
     hard_blocks = constraints.get("hardBlocks") or plan.get("hardBlocks") or []
     if hard_blocks:
@@ -419,6 +427,44 @@ def _timeline_event_line(item: dict, *, default_certainty: str) -> str:
     detail = " ".join(part for part in parts if part)
     suffix = "，".join(item for item in (label, f"来源 {source}" if source else "", intent[:100] if intent else "") if item)
     return f"{detail}（{suffix}）" if suffix else detail
+
+
+def _week_plan_day_line(item: dict) -> str:
+    day_type = str(item.get("dayType") or "").strip()
+    confidence = str(item.get("confidence") or "").strip()
+    hard_blocks = [
+        block for block in (item.get("hardBlocks") or []) if isinstance(block, dict)
+    ]
+    basis = [str(text).strip() for text in (item.get("basis") or []) if str(text).strip()]
+    label = {
+        "work": "上班/工作",
+        "rest": "休息",
+        "scheduled": "有已确定安排",
+        "flexible_work": "弹性工作倾向",
+        "flexible_rest": "休息或个人安排倾向",
+        "roster_unknown": "排班未锁定",
+    }.get(day_type, day_type or "未判断")
+    prefix = " ".join(
+        part
+        for part in (
+            str(item.get("label") or "").strip(),
+            str(item.get("date") or "").strip(),
+            f"周{item.get('weekday')}" if item.get("weekday") else "",
+        )
+        if part
+    )
+    details = [label]
+    if confidence:
+        details.append(f"依据 {confidence}")
+    if basis:
+        details.append("、".join(basis[:3]))
+    if hard_blocks:
+        detail = "；".join(
+            _timeline_event_line(block, default_certainty="hard")
+            for block in hard_blocks[:3]
+        )
+        details.append(f"硬日程：{detail}")
+    return f"{prefix}：{'；'.join(details)}"
 
 
 def _routine_summary(routine: dict) -> str:

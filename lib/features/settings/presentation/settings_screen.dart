@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -2070,6 +2071,9 @@ class _LifeRecordsPanel extends StatelessWidget {
       (life['profile'] as Map?) ?? const {},
     );
     final plan = Map<String, dynamic>.from((life['plan'] as Map?) ?? const {});
+    final weekPlan = Map<String, dynamic>.from(
+      (life['weekPlan'] as Map?) ?? const {},
+    );
     final lifeConstraints = Map<String, dynamic>.from(
       (life['lifeConstraints'] as Map?) ?? const {},
     );
@@ -2186,69 +2190,189 @@ class _LifeRecordsPanel extends StatelessWidget {
         ),
         if (_readString(plan, 'dayTheme').isNotEmpty) ...[
           const SizedBox(height: 10),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: colors.surfaceSoft,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: colors.border),
-            ),
+          _SettingsExpansionSection(
+            icon: Icons.today_outlined,
+            title: '今日计划',
+            subtitle: _readString(plan, 'dayTheme'),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('今日计划', style: Theme.of(context).textTheme.titleSmall),
-                const SizedBox(height: 6),
-                Text(
-                  _readString(plan, 'dayTheme'),
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 8),
                 for (final item in ((plan['plannedEvents'] as List?) ??
                         const [])
                     .whereType<Map>()
-                    .take(5))
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      _joinFilled([
-                        (item['timeRange'] ?? '').toString(),
-                        (item['location'] ?? '').toString(),
-                        (item['activity'] ?? '').toString(),
-                      ], separator: ' · '),
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
+                    .take(10))
+                  _PlanLine(item: Map<String, dynamic>.from(item)),
                 if (hardBlocks.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Text('锁定日程', style: Theme.of(context).textTheme.labelMedium),
-                  for (final item in hardBlocks.take(4))
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        _joinFilled([
-                          (item['timeRange'] ?? '').toString(),
-                          (item['location'] ?? '').toString(),
-                          (item['activity'] ?? '').toString(),
-                        ], separator: ' · '),
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
+                  for (final item in hardBlocks.take(6))
+                    _PlanLine(item: Map<String, dynamic>.from(item)),
                 ],
               ],
             ),
           ),
         ],
         const SizedBox(height: 10),
+        _WeekPlanSection(weekPlan: weekPlan),
+        const SizedBox(height: 10),
         if (events.isEmpty)
           Text('暂无轨迹事件。', style: Theme.of(context).textTheme.bodySmall)
         else
-          Column(
-            children: [
-              for (final event in events.take(24)) _LifeEventRow(event: event),
-            ],
+          _SettingsExpansionSection(
+            icon: Icons.route_outlined,
+            title: '最近轨迹事件',
+            subtitle: '${events.length} 条，可展开查看',
+            child: Column(
+              children: [
+                for (final event in events.take(24))
+                  _LifeEventRow(event: event),
+              ],
+            ),
           ),
+        const SizedBox(height: 10),
+        _SettingsExpansionSection(
+          icon: Icons.data_object_rounded,
+          title: '原始生活上下文',
+          subtitle: '调试用 JSON 摘要，可展开核对后端返回内容',
+          child: SelectableText(
+            _prettyJson(life),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
+          ),
+        ),
       ],
+    );
+  }
+}
+
+class _WeekPlanSection extends StatelessWidget {
+  const _WeekPlanSection({required this.weekPlan});
+
+  final Map<String, dynamic> weekPlan;
+
+  @override
+  Widget build(BuildContext context) {
+    final days = ((weekPlan['days'] as List?) ?? const <dynamic>[])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: false);
+    if (days.isEmpty) {
+      return Text('暂无周级规划。', style: Theme.of(context).textTheme.bodySmall);
+    }
+    return _SettingsExpansionSection(
+      icon: Icons.date_range_outlined,
+      title: '周级规划',
+      subtitle: _joinFilled([
+        _readString(weekPlan, 'startDate'),
+        _readString(weekPlan, 'source', fallback: 'routine+life_facts'),
+        '${days.length} 天',
+      ], separator: ' · '),
+      child: Column(
+        children: [for (final day in days.take(7)) _WeekPlanDayRow(day: day)],
+      ),
+    );
+  }
+}
+
+class _WeekPlanDayRow extends StatelessWidget {
+  const _WeekPlanDayRow({required this.day});
+
+  final Map<String, dynamic> day;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    final hardBlocks = ((day['hardBlocks'] as List?) ?? const <dynamic>[])
+        .whereType<Map>()
+        .toList(growable: false);
+    final basis = ((day['basis'] as List?) ?? const <dynamic>[])
+        .map((item) => item.toString())
+        .where((item) => item.trim().isNotEmpty)
+        .join('、');
+    final title = _joinFilled([
+      _readString(day, 'label'),
+      _readString(day, 'date'),
+      _readString(day, 'weekday').isEmpty
+          ? ''
+          : '周${_readString(day, 'weekday')}',
+    ], separator: ' · ');
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(
+              _weekPlanIcon(_readString(day, 'dayType')),
+              size: 18,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: 2),
+                Text(
+                  _weekPlanLabel(_readString(day, 'dayType')),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                if (basis.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    _joinFilled([
+                      '依据 $basis',
+                      _readString(day, 'confidence'),
+                    ], separator: ' · '),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: colors.textMuted),
+                  ),
+                ],
+                for (final block in hardBlocks.take(3))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      _joinFilled([
+                        (block['timeRange'] ?? '').toString(),
+                        (block['location'] ?? '').toString(),
+                        (block['activity'] ?? '').toString(),
+                      ], separator: ' · '),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: colors.textMuted),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PlanLine extends StatelessWidget {
+  const _PlanLine({required this.item});
+
+  final Map<String, dynamic> item;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Text(
+        _joinFilled([
+          (item['timeRange'] ?? '').toString(),
+          (item['location'] ?? '').toString(),
+          (item['activity'] ?? '').toString(),
+        ], separator: ' · '),
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
     );
   }
 }
@@ -2384,36 +2508,45 @@ class _LifeFactsPanel extends StatelessWidget {
         const SizedBox(height: 10),
         if (facts.isEmpty)
           Text('暂无生活事实。', style: Theme.of(context).textTheme.bodySmall)
-        else
-          Column(
-            children: [
-              for (final fact in activeFacts.take(40))
-                _LifeFactRow(
-                  fact: fact,
-                  onEdit: () => onEdit(fact),
-                  onComplete: () => onComplete(fact),
-                  onCancel: () => onCancel(fact),
-                ),
-              if (historyFacts.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '历史事实',
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                ),
-                for (final fact in historyFacts.take(24))
+        else ...[
+          _SettingsExpansionSection(
+            icon: Icons.fact_check_outlined,
+            title: '活跃事实',
+            subtitle: '${activeFacts.length} 条候选/计划/进行中事实',
+            initiallyExpanded: activeFacts.length <= 6,
+            child: Column(
+              children: [
+                for (final fact in activeFacts.take(40))
                   _LifeFactRow(
                     fact: fact,
-                    muted: true,
                     onEdit: () => onEdit(fact),
                     onComplete: () => onComplete(fact),
                     onCancel: () => onCancel(fact),
                   ),
               ],
-            ],
+            ),
           ),
+          if (historyFacts.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _SettingsExpansionSection(
+              icon: Icons.history_outlined,
+              title: '历史事实',
+              subtitle: '${historyFacts.length} 条已结束/归档事实',
+              child: Column(
+                children: [
+                  for (final fact in historyFacts.take(24))
+                    _LifeFactRow(
+                      fact: fact,
+                      muted: true,
+                      onEdit: () => onEdit(fact),
+                      onComplete: () => onComplete(fact),
+                      onCancel: () => onCancel(fact),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ],
       ],
     );
   }
@@ -2957,6 +3090,49 @@ String _formatEnergy(Object? value) {
   return '${(number.clamp(0.0, 1.0) * 100).round()}%';
 }
 
+String _weekPlanLabel(String dayType) {
+  switch (dayType) {
+    case 'work':
+      return '上班/工作';
+    case 'rest':
+      return '休息';
+    case 'scheduled':
+      return '有已确定安排';
+    case 'flexible_work':
+      return '弹性工作倾向';
+    case 'flexible_rest':
+      return '休息或个人安排倾向';
+    case 'roster_unknown':
+      return '排班未锁定';
+  }
+  return dayType.isEmpty ? '未判断' : dayType;
+}
+
+IconData _weekPlanIcon(String dayType) {
+  switch (dayType) {
+    case 'work':
+    case 'flexible_work':
+      return Icons.work_outline_rounded;
+    case 'rest':
+    case 'flexible_rest':
+      return Icons.weekend_outlined;
+    case 'scheduled':
+      return Icons.event_available_outlined;
+    case 'roster_unknown':
+      return Icons.help_outline_rounded;
+  }
+  return Icons.date_range_outlined;
+}
+
+String _prettyJson(Object value) {
+  const encoder = JsonEncoder.withIndent('  ');
+  try {
+    return encoder.convert(value);
+  } catch (_) {
+    return value.toString();
+  }
+}
+
 class _SettingsHero extends StatelessWidget {
   const _SettingsHero({required this.settings, required this.backendStatus});
 
@@ -3115,6 +3291,43 @@ class _CollapsiblePanel extends StatelessWidget {
           childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
           children: [child],
         ),
+      ),
+    );
+  }
+}
+
+class _SettingsExpansionSection extends StatelessWidget {
+  const _SettingsExpansionSection({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.child,
+    this.initiallyExpanded = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Widget child;
+  final bool initiallyExpanded;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.alicerColors;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.surfaceSoft,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colors.border),
+      ),
+      child: ExpansionTile(
+        leading: Icon(icon, size: 20),
+        initiallyExpanded: initiallyExpanded,
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        title: Text(title, style: Theme.of(context).textTheme.titleSmall),
+        subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+        children: [child],
       ),
     );
   }

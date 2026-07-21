@@ -78,14 +78,39 @@ class DailyMaintenanceServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_diary_prompt_prioritizes_user_life_over_companion_life(self) -> None:
-        system = _diary_system_prompt("week", {"companion": {"name": "苏晚秋"}})
-        user = _diary_user_prompt("week", "2026-W29", {"chatMessages": []})
+        system = _diary_system_prompt(
+            "week",
+            {"companion": {"name": "苏晚秋", "userName": "猫哥"}},
+        )
+        user = _diary_user_prompt(
+            "week",
+            "2026-W29",
+            {
+                "companionName": "苏晚秋",
+                "userName": "猫哥",
+                "chatMessages": [
+                    {
+                        "speaker": "苏晚秋",
+                        "role": "assistant",
+                        "roleMeaning": "伴侣回复",
+                        "content": "我刚下飞机，主人你到啦？",
+                    },
+                ],
+            },
+        )
 
-        self.assertIn("为用户写", system)
+        self.assertIn("为猫哥写", system)
+        self.assertIn("第一人称“我”只能指苏晚秋", system)
+        self.assertIn("绝不能替猫哥自述", system)
         self.assertIn("用户这段时间的生活", system)
-        self.assertIn("你自己的生活只能作为关系背景", system)
+        self.assertIn("你的生活只能作为关系背景", system)
         self.assertIn("不要把你的模拟生活", system)
+        self.assertIn("作者/叙述者：苏晚秋；记录对象：猫哥", user)
         self.assertIn("用户生活记录", user)
+        self.assertIn("用户事实的唯一直接来源", user)
+        self.assertIn("伴侣回复里的第一人称事件", user)
+        self.assertIn("不能写成用户下飞机/用户纹身", user)
+        self.assertIn("不能当作用户事实", user)
         self.assertIn("不要用伴侣自己的经历填充篇幅", user)
 
 

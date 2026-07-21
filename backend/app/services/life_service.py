@@ -93,19 +93,28 @@ async def advance_life_until_now(
 def build_life_context(db: Database, settings: dict | None = None) -> dict:
     merged = merge_settings(settings or db.get_settings())
     if (merged.get("life") or {}).get("enabled") is False:
-        return {"enabled": False, "state": {}, "profile": {}, "plan": {}, "recentEvents": []}
+        return {"enabled": False, "state": {}, "profile": {}, "plan": {}, "weekPlan": {}, "recentEvents": []}
     stored = db.get_life_state() or {}
     recent = list(reversed(db.list_life_events(limit=12)))
     fact_constraints = fact_constraints_for_life(db, merged)
-    life_constraints = resolve_life_constraints_for_day(db, dt.datetime.now(TZ).date(), merged)
+    today = dt.datetime.now(TZ).date()
+    life_constraints = resolve_life_constraints_for_day(db, today, merged)
     profile = stored.get("profile") or _derive_profile_from_memories(db, merged)[0]
     profile = _effective_profile(profile, life_constraints=life_constraints)
+    week_plan = _build_week_plan(
+        db,
+        settings=merged,
+        profile=profile,
+        start_day=today,
+        recent_events=recent,
+    )
     return {
         "enabled": True,
         "profile": profile,
         "state": stored.get("state") or _default_state(merged),
         "plan": stored.get("plan") or {},
         "planDate": stored.get("planDate") or "",
+        "weekPlan": week_plan,
         "updatedAt": stored.get("updatedAt"),
         "profileUpdatedAt": stored.get("profileUpdatedAt"),
         "recentEvents": recent,
@@ -475,6 +484,121 @@ def _fallback_plan(*, profile: dict, slot: dt.datetime, recent_events: list[dict
         "generatedAt": dt.datetime.now(TZ).isoformat(),
         "routine": routine,
     }
+
+
+def _build_week_plan(
+    db: Database,
+    *,
+    settings: dict,
+    profile: dict,
+    start_day: dt.date,
+    recent_events: list[dict],
+    days: int = 7,
+) -> dict:
+    routine = profile.get("routine") or _routine_for_profile(profile)
+    generated_at = dt.datetime.now(TZ).isoformat()
+    items = []
+    for offset in range(max(1, min(days, 14))):
+        day = start_day + dt.timedelta(days=offset)
+        slot = dt.datetime.combine(day, dt.time(9, 0), tzinfo=TZ)
+        constraints = resolve_life_constraints_for_day(db, day, settings)
+        calendar = _calendar_state_from_events(recent_events, slot=slot)
+        hard_blocks = [
+            _week_hard_block_summary(item)
+            for item in (constraints.get("hardBlocks") or [])[:6]
+            if isinstance(item, dict)
+        ]
+        day_type, confidence, basis = _routine_day_projection(
+            routine=routine,
+            slot=slot,
+            calendar=calendar,
+            hard_blocks=hard_blocks,
+        )
+        if constraints.get("conditionalCommitments"):
+            basis.append("有条件承诺")
+        if constraints.get("conflicts"):
+            basis.append("存在冲突需复核")
+        items.append(
+            {
+                "date": day.isoformat(),
+                "weekday": "一二三四五六日"[day.weekday()],
+                "label": _relative_day_label(day, start_day=start_day),
+                "dayType": day_type,
+                "confidence": confidence,
+                "basis": basis[:5],
+                "hardBlocks": hard_blocks,
+            }
+        )
+    return {
+        "startDate": start_day.isoformat(),
+        "days": items,
+        "routine": routine,
+        "source": "routine+life_facts",
+        "generatedAt": generated_at,
+        "rules": [
+            "硬日程和事实账本优先于长期节律",
+            "固定工作制可按周内/周末回答上不上班",
+            "排班制没有硬事实时只能说排班未锁定，不能编造具体航班",
+        ],
+    }
+
+
+def _week_hard_block_summary(item: dict) -> dict:
+    return {
+        "timeRange": str(item.get("timeRange") or "").strip()[:40],
+        "activity": str(item.get("activity") or item.get("title") or "已确定安排").strip()[:80],
+        "location": str(item.get("location") or "").strip()[:80],
+        "intent": str(item.get("intent") or item.get("summary") or "").strip()[:140],
+        "source": str(item.get("source") or "fact").strip()[:40],
+    }
+
+
+def _routine_day_projection(
+    *,
+    routine: dict,
+    slot: dt.datetime,
+    calendar: dict,
+    hard_blocks: list[dict],
+) -> tuple[str, str, list[str]]:
+    hard_text = " ".join(
+        f"{item.get('activity') or ''} {item.get('location') or ''}"
+        for item in hard_blocks
+    )
+    if hard_blocks:
+        if any(word in hard_text for word in ("执飞", "航班", "机上", "机场", "上班", "工作", "培训", "备勤", "课程", "上课")):
+            return "work", "hard", ["事实账本有硬日程"]
+        if any(word in hard_text for word in ("休息", "调休", "放假", "请假")):
+            return "rest", "hard", ["事实账本有休息安排"]
+        return "scheduled", "hard", ["事实账本有已确定安排"]
+
+    routine_type = str(routine.get("type") or "")
+    if routine_type in {"weekday_office", "campus"}:
+        if slot.weekday() < 5:
+            label = "校园周内节律" if routine_type == "campus" else "工作日办公室节律"
+            return "work", "routine", [label]
+        return "rest", "routine", ["周末默认休息"]
+    if routine_type == "flexible":
+        if slot.weekday() < 5:
+            return "flexible_work", "routine", ["弹性工作周内倾向"]
+        return "flexible_rest", "routine", ["弹性工作周末倾向休息或个人安排"]
+    if routine_type == "roster":
+        if _routine_is_rest_day(routine, slot, calendar):
+            return "rest", "routine", ["排班制且近期疲劳偏高，倾向恢复"]
+        return "roster_unknown", "tentative", ["排班制未见硬航班事实"]
+    if slot.weekday() < 5:
+        return "work", "routine", ["默认工作日节律"]
+    return "rest", "routine", ["默认周末休息"]
+
+
+def _relative_day_label(day: dt.date, *, start_day: dt.date) -> str:
+    delta = (day - start_day).days
+    if delta == 0:
+        return "今天"
+    if delta == 1:
+        return "明天"
+    if delta == 2:
+        return "后天"
+    return f"周{'一二三四五六日'[day.weekday()]}"
 
 
 def _normalize_plan_certainty(value: object, *, default: str) -> str:

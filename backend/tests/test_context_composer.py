@@ -99,6 +99,52 @@ class ContextComposerTest(unittest.TestCase):
         self.assertIn("温泉镇送咖啡被航班阻断", brief)
         self.assertIn("排班制", brief)
 
+    def test_context_brief_includes_week_plan_projection(self) -> None:
+        composed = compose_prompt_context(
+            settings={"memory": {"longTerm": True}, "environment": {"time": True}},
+            recent_messages=[],
+            memories=[],
+            environment={"time": "2026-07-20 09:00"},
+            life_context={
+                "enabled": True,
+                "state": {},
+                "plan": {},
+                "lifeConstraints": {},
+                "routine": {"type": "weekday_office"},
+                "weekPlan": {
+                    "days": [
+                        {
+                            "date": "2026-07-20",
+                            "weekday": "一",
+                            "label": "今天",
+                            "dayType": "work",
+                            "confidence": "routine",
+                            "basis": ["工作日办公室节律"],
+                            "hardBlocks": [],
+                        },
+                        {
+                            "date": "2026-07-21",
+                            "weekday": "二",
+                            "label": "明天",
+                            "dayType": "work",
+                            "confidence": "routine",
+                            "basis": ["工作日办公室节律"],
+                            "hardBlocks": [],
+                        },
+                    ]
+                },
+                "recentEvents": [],
+            },
+            user_context={"enabled": False},
+            photo_context={"enabled": False},
+            world_context={"activeFacts": [], "freshness": {}},
+        )
+
+        future = composed["variables"]["world.future"]
+        self.assertIn("周级规划/节律投影", future)
+        self.assertIn("明天 2026-07-21 周二：上班/工作", future)
+        self.assertIn("Alicer 未来时间线", composed["variables"]["context.brief"])
+
     def test_stale_life_state_is_not_presented_as_current(self) -> None:
         stale_state_at = dt.datetime(2026, 7, 18, 4, 0, tzinfo=TZ).timestamp()
         top_level_updated_at = dt.datetime(2026, 7, 18, 10, 6, tzinfo=TZ).timestamp()

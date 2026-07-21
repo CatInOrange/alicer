@@ -99,8 +99,13 @@ async def generate_entry(
         summary=dict((existing or {}).get("summary") or {}),
     )
     try:
-        context = _collect_context(db, kind=kind, period_key=period_key)
         settings = merge_settings(db.get_settings())
+        context = _collect_context(
+            db,
+            kind=kind,
+            period_key=period_key,
+            settings=settings,
+        )
         messages = [
             {"role": "system", "content": _diary_system_prompt(kind, settings)},
             {"role": "user", "content": _diary_user_prompt(kind, period_key, context)},
@@ -132,13 +137,28 @@ async def generate_entry(
         )
 
 
-def _collect_context(db: Database, *, kind: str, period_key: str) -> dict:
+def _collect_context(
+    db: Database,
+    *,
+    kind: str,
+    period_key: str,
+    settings: dict,
+) -> dict:
     start, end = _period_bounds(kind, period_key)
+    companion = _companion_name(settings)
+    user_name = _user_name(settings)
     messages = [
         {
             "role": item["role"],
+            "speaker": user_name if item["role"] == "user" else companion,
+            "roleMeaning": (
+                "用户发言，可作为用户事实"
+                if item["role"] == "user"
+                else "伴侣回复，只能作为伴侣视角/关系背景"
+            ),
             "content": item["content"][:900],
             "createdAt": item["createdAt"],
+            "timeText": _message_time(item.get("createdAt")),
         }
         for item in db.list_messages(limit=300)
         if start <= float(item.get("createdAt") or 0) <= end and item.get("content")
@@ -146,7 +166,10 @@ def _collect_context(db: Database, *, kind: str, period_key: str) -> dict:
     return {
         "kind": kind,
         "periodKey": period_key,
+        "periodLabel": _period_label(kind, period_key),
         "timezone": "Asia/Shanghai",
+        "companionName": companion,
+        "userName": user_name,
         "chatMessages": messages[-120:],
         "messageCount": len(messages),
     }
@@ -169,29 +192,68 @@ def _period_bounds(kind: str, period_key: str) -> tuple[float, float]:
 
 
 def _diary_system_prompt(kind: str, settings: dict) -> str:
-    name = ((settings.get("companion") or {}).get("name") or "Alice")
+    name = _companion_name(settings)
+    user_name = _user_name(settings)
     label = {"day": "日记", "week": "周记", "month": "月记"}[kind]
     return (
-        f"你是{name}，要为用户写一篇偏生活档案的{label}。"
+        f"你是{name}，正在以伴侣口吻为{user_name}写一篇偏生活档案的{label}。"
+        f"叙述视角必须是{name}：第一人称“我”只能指{name}，不能指{user_name}；"
+        f"写{user_name}时用“你”“{user_name}”“用户”或“他”，绝不能替{user_name}自述。"
         "核心目标是记录用户这段时间的生活、状态、安排、情绪、任务推进、习惯和重要决定；"
-        "你自己的生活只能作为关系背景或陪伴视角的少量旁注，不能成为主线。"
-        "只能基于聊天证据写，不要把你的模拟生活、朋友圈或推测当成用户事实。"
-        "语气自然亲密，但要像可靠的生活记录，不要写成伴侣自传或工作总结。"
+        "你的生活只能作为关系背景或陪伴视角的少量旁注，不能成为主线。"
+        "阅读聊天时要严格区分：用户发言才是用户事实；伴侣回复里的“我”是伴侣自己，"
+        "伴侣回复里的“你/主人”才是在称呼用户。"
+        "只有标注为“用户发言”的内容能证明用户说过某句话、做过某个动作或表达过某个态度；"
+        "标注为“伴侣回复”的内容不能改写成用户原话或用户动作。"
+        "引用或转述用户发言时必须写成“你说/你问/你回/你表示”，"
+        "并把用户原话里的第一人称“我”转换为“你”；不能写成“我说/我问/我表示”。"
+        "只有转述伴侣回复时，才可以用“我说/我问/我当时”。"
+        "只能基于聊天证据写，不要把你的模拟生活、朋友圈、航班、纹身或推测当成用户事实。"
+        "语气自然亲密，但要像可靠的生活记录，不要写成伴侣自传、用户自传或工作总结。"
     )
 
 
 def _diary_user_prompt(kind: str, period_key: str, context: dict) -> str:
     label = {"day": "今天", "week": "这一周", "month": "这个月"}[kind]
-    lines = "\n".join(
-        f"- {item['role']}: {item['content']}" for item in context.get("chatMessages", [])[-80:]
+    companion = str(context.get("companionName") or "伴侣")
+    user_name = str(context.get("userName") or "用户")
+    user_lines = "\n".join(
+        (
+            f"- {item.get('timeText') or '时间未知'} "
+            f"{item.get('speaker') or user_name}"
+            f"（{item.get('roleMeaning') or '用户发言'}）: {item['content']}"
+        )
+        for item in context.get("chatMessages", [])[-80:]
+        if item.get("role") == "user"
+    )
+    companion_lines = "\n".join(
+        (
+            f"- {item.get('timeText') or '时间未知'} "
+            f"{item.get('speaker') or item['role']}"
+            f"（{item.get('roleMeaning') or item['role']}）: {item['content']}"
+        )
+        for item in context.get("chatMessages", [])[-80:]
+        if item.get("role") != "user"
     )
     return (
-        f"时间：{period_key}\n"
-        f"请根据下面的聊天内容写{label}的用户生活记录。\n"
+        f"时间：{context.get('periodLabel') or period_key}\n"
+        f"作者/叙述者：{companion}；记录对象：{user_name}。\n"
+        f"请根据下面的聊天内容，用{companion}写给/写关于{user_name}的伴侣口吻，写{label}的用户生活记录。\n"
+        "标题和正文里的日期、星期必须以“时间”这一行和消息时间为准；"
+        "聊天里提到的“周五/明天/今晚”等相对时间只能按消息时间换算，不能覆盖日记日期。"
         "写作重点按优先级：用户发生了什么、用户在忙什么、身体/情绪/习惯/任务状态、关系互动里能支持这些判断的细节。"
+        "先读“用户发言”，它是用户事实的唯一直接来源；再读“伴侣回复”，它只补充伴侣当时如何回应、关系氛围和伴侣自己的经历。"
+        "涉及时间时优先使用每条消息前的 Asia/Shanghai 时间，不要自行猜成上午/下午的其他钟点。"
+        f"凡是引用“用户发言”里的话，都要转换为{companion}视角：用户原话里的“我”写成“你”，"
+        f"例如用户说“我盯着呢”，日记里应写“你说你盯着呢”，不能写“我说我盯着呢”。"
+        "不要把伴侣回复里的第一人称事件改写成用户事件；例如伴侣说“我下飞机/我纹身”，只能写成伴侣发生了这件事，"
+        "用户最多是到场、安排、回应、关心或确认，不能写成用户下飞机/用户纹身。"
+        "不要把伴侣回复里的玩笑、想象、动作描写或称呼改写成用户说过的话。"
         "如果聊天很少，就明确写“可用记录不多”，不要用伴侣自己的经历填充篇幅。"
-        "格式：第一行用 Markdown 二级标题；正文 3-7 段；结尾可以留一句短短的陪伴私语，但不要把整篇写成情书。\n\n"
-        f"聊天内容：\n{lines or '这段时间没有可用聊天。'}"
+        f"格式：第一行用 Markdown 二级标题；正文 3-7 段；全文保持{companion}视角；"
+        f"结尾可以留一句对{user_name}说的短短陪伴私语，但不要把整篇写成情书。\n\n"
+        f"用户发言（用户事实的直接来源）：\n{user_lines or '这段时间没有可用用户发言。'}\n\n"
+        f"伴侣回复（只能作为伴侣视角/关系背景，不能当作用户事实）：\n{companion_lines or '这段时间没有可用伴侣回复。'}"
     )
 
 
@@ -217,5 +279,31 @@ def _week_key(day: dt.date) -> str:
     return f"{year:04d}-W{week:02d}"
 
 
+def _period_label(kind: str, period_key: str) -> str:
+    if kind == "day":
+        day = dt.date.fromisoformat(period_key)
+        weekday = "一二三四五六日"[day.weekday()]
+        return f"{period_key} 星期{weekday}"
+    return period_key
+
+
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _companion_name(settings: dict) -> str:
+    return str(((settings.get("companion") or {}).get("name") or "Alice")).strip() or "Alice"
+
+
+def _user_name(settings: dict) -> str:
+    return str(((settings.get("companion") or {}).get("userName") or "用户")).strip() or "用户"
+
+
+def _message_time(value: object) -> str:
+    try:
+        timestamp = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ""
+    if timestamp <= 0:
+        return ""
+    return dt.datetime.fromtimestamp(timestamp, tz=TZ).strftime("%Y-%m-%d %H:%M")
