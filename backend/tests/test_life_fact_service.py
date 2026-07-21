@@ -11,7 +11,9 @@ from app.services.life_fact_service import (
     TZ,
     cleanup_life_facts,
     extract_life_facts,
+    extract_life_facts_batch,
     reflect_life_fact_retention,
+    refresh_life_facts_from_recent_chat,
     resolve_life_constraints_for_day,
 )
 from app.services.life_service import _effective_profile, _fallback_plan, _normalize_plan
@@ -21,9 +23,13 @@ class FakeLlm:
     def __init__(self, payload: dict) -> None:
         self.payload = payload
         self.messages: list[dict] = []
+        self.all_messages: list[list[dict]] = []
+        self.calls = 0
 
     async def complete(self, *, messages: list[dict], model_settings: dict) -> str:
+        self.calls += 1
         self.messages = messages
+        self.all_messages.append(messages)
         return json.dumps(self.payload, ensure_ascii=False)
 
 
@@ -124,6 +130,120 @@ class LifeFactServiceTest(unittest.IsolatedAsyncioTestCase):
         hard_blocks = json.dumps(plan.get("hardBlocks") or [], ensure_ascii=False)
         self.assertIn(facts[0]["id"], hard_blocks)
         self.assertIn("航班", hard_blocks)
+
+    async def test_batch_extracts_multiple_pairs_with_one_llm_call(self) -> None:
+        anchor = dt.datetime(2026, 7, 21, 12, 48, tzinfo=TZ)
+        llm = FakeLlm(
+            {
+                "facts": [
+                    {
+                        "sourcePairId": "msg_user_jeans:msg_assistant_jeans",
+                        "type": "relationship_commitment",
+                        "title": "去太古里挑选微喇牛仔裤并拍照给用户验收",
+                        "summary": "苏晚秋在2026-07-21 12:48承诺直接去太古里挑选微喇牛仔裤，并在试衣间拍照给用户验收。",
+                        "confidence": 0.78,
+                        "importance": 0.65,
+                        "status": "planned",
+                        "metadata": {
+                            "targetDate": "2026-07-21",
+                            "timeHint": "afternoon",
+                            "commitmentStrength": "accepted",
+                            "flexibility": "soft",
+                        },
+                    }
+                ]
+            }
+        )
+
+        facts = await extract_life_facts_batch(
+            self.db,
+            llm,  # type: ignore[arg-type]
+            settings={},
+            pairs=[
+                (
+                    {
+                        "id": "msg_user_coffee",
+                        "content": "你到冷萃店拍张咖啡杯影子照吧",
+                        "createdAt": anchor.timestamp() - 60,
+                    },
+                    {
+                        "id": "msg_assistant_coffee",
+                        "content": "行，到店我拍给你看。",
+                        "createdAt": anchor.timestamp() - 50,
+                    },
+                ),
+                (
+                    {
+                        "id": "msg_user_jeans",
+                        "content": "下午去太古里买条牛仔裤，我喜欢微喇那种，拍张照给我看看",
+                        "createdAt": anchor.timestamp(),
+                    },
+                    {
+                        "id": "msg_assistant_jeans",
+                        "content": "行，那我直接拐去太古里给你挑微喇裤，试衣间拍给你验收。",
+                        "createdAt": anchor.timestamp() + 10,
+                    },
+                ),
+            ],
+        )
+
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(facts[0]["metadata"]["sourcePairId"], "msg_user_jeans:msg_assistant_jeans")
+        self.assertEqual(facts[0]["metadata"]["targetDate"], "2026-07-21")
+        prompt_payload = json.loads(llm.messages[1]["content"])
+        self.assertEqual(len(prompt_payload["conversationPairs"]), 2)
+
+    async def test_refresh_batches_candidates_and_skips_processed_pairs(self) -> None:
+        self.db.add_message(message_id="msg_user_old", role="user", content="明天下午去机场吗？")
+        self.db.add_message(message_id="msg_assistant_old", role="assistant", content="嗯，明天下午去机场。")
+        self.db.upsert_life_fact(
+            fact_id="fact_old",
+            fact_type="schedule_commitment",
+            status="planned",
+            title="07-22 下午去机场",
+            summary="苏晚秋在2026-07-22下午去机场。",
+            source="chat",
+            source_message_id="msg_user_old",
+            related={"userMessageId": "msg_user_old", "assistantMessageId": "msg_assistant_old", "sourcePairId": "msg_user_old:msg_assistant_old"},
+            metadata={"sourcePairId": "msg_user_old:msg_assistant_old"},
+        )
+        self.db.add_message(
+            message_id="msg_user_new",
+            role="user",
+            content="下午去太古里买条牛仔裤，我喜欢微喇那种，拍张照给我看看",
+        )
+        self.db.add_message(
+            message_id="msg_assistant_new",
+            role="assistant",
+            content="行，那我直接拐去太古里给你挑微喇裤，试衣间拍给你验收。",
+        )
+        llm = FakeLlm(
+            {
+                "facts": [
+                    {
+                        "sourcePairId": "msg_user_new:msg_assistant_new",
+                        "type": "relationship_commitment",
+                        "title": "去太古里挑选微喇牛仔裤并拍照给用户验收",
+                        "summary": "苏晚秋承诺去太古里挑选微喇牛仔裤，并拍照给用户验收。",
+                        "confidence": 0.8,
+                        "importance": 0.65,
+                        "status": "planned",
+                        "metadata": {"targetDate": "2026-07-21", "commitmentStrength": "accepted", "flexibility": "soft"},
+                    }
+                ]
+            }
+        )
+
+        result = await refresh_life_facts_from_recent_chat(self.db, llm, settings={}, limit=10)  # type: ignore[arg-type]
+
+        self.assertEqual(llm.calls, 2)
+        prompt_payload = json.loads(llm.all_messages[0][1]["content"])
+        self.assertEqual(len(prompt_payload["conversationPairs"]), 1)
+        self.assertEqual(result["candidatePairs"], 2)
+        self.assertEqual(result["pendingPairs"], 1)
+        self.assertEqual(result["batchPairs"], 1)
+        self.assertEqual(len(result["savedFacts"]), 1)
 
     def test_cleanup_supersedes_duplicate_active_facts(self) -> None:
         starts_at = dt.datetime(2026, 7, 18, 9, 0, tzinfo=TZ).timestamp()

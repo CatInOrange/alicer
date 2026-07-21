@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hashlib
 import json
 import re
 from zoneinfo import ZoneInfo
@@ -64,8 +65,17 @@ LONG_TERM_FACT_KEYWORDS = (
     "称呼",
 )
 VALUE_SIGNALS = re.compile(
-    r"(明天|后天|今晚|今天|下周|周末|早上|中午|下午|晚上|凌晨|[0-2]?\d[:：点])"
-    r"|航班|机场|出差|上班|加班|下班|请假|休假|约会|见朋友|回家|搬家|旅行|拍照|自拍|照片|记住|别忘|答应|说好",
+    r"(明天|后天|今晚|今天|下周|周末|早上|中午|下午|晚上|凌晨|等会儿|一会儿|待会儿|稍后|回头|[0-2]?\d[:：点])"
+    r"|航班|机场|出差|上班|加班|下班|请假|休假|约会|见朋友|回家|搬家|旅行|去买|挑|逛|试穿|下单|商场|太古里"
+    r"|拍照|自拍|照片|拍给你看|记住|别忘|答应|说好",
+    re.IGNORECASE,
+)
+ASSISTANT_COMMITMENT_SIGNALS = re.compile(
+    r"(我|咱|我们).{0,12}(等会儿|一会儿|待会儿|稍后|回头|直接|会|去|给你|帮你|记着|拍|买|挑|试穿)",
+    re.IGNORECASE,
+)
+SOFT_PLAN_SIGNALS = re.compile(
+    r"(等会儿|一会儿|待会儿|稍后|回头|去买|挑|逛|试穿|下单|商场|太古里|拍给你看)",
     re.IGNORECASE,
 )
 RELATIVE_TIME_RE = re.compile(r"(今天|明天|后天|今晚|下周|周末)")
@@ -198,6 +208,123 @@ async def extract_life_facts(
     return saved
 
 
+async def extract_life_facts_batch(
+    db: Database,
+    llm: LlmService,
+    *,
+    settings: dict,
+    pairs: list[tuple[dict, dict]],
+    life_context: dict | None = None,
+    reconcile: bool = False,
+) -> list[dict]:
+    if not pairs:
+        return []
+    merged = merge_settings(settings or db.get_settings())
+    cleanup_life_facts(db)
+    existing = build_world_context(db, merged)
+    companion = str(((merged.get("companion") or {}).get("name") or "Alice")).strip() or "Alice"
+    extracted_at = dt.datetime.now(TZ)
+    pair_lookup: dict[str, tuple[dict, dict, dt.datetime]] = {}
+    conversation_pairs: list[dict] = []
+    for index, (user_message, assistant_message) in enumerate(pairs[:10]):
+        conversation_time = _message_datetime(user_message, fallback=extracted_at)
+        pair_id = _pair_id(user_message, assistant_message, index=index)
+        pair_lookup[pair_id] = (user_message, assistant_message, conversation_time)
+        conversation_pairs.append(
+            {
+                "pairId": pair_id,
+                "userMessageId": user_message.get("id"),
+                "assistantMessageId": assistant_message.get("id"),
+                "conversationTime": conversation_time.isoformat(),
+                "userLifeDay": _life_day(conversation_time).isoformat(),
+                "user": str(user_message.get("content") or "")[:1600],
+                "assistant": str(assistant_message.get("content") or "")[:2000],
+            }
+        )
+    prompt = [
+        {
+            "role": "system",
+            "content": (
+                "你是 Alicer 的生活事实批量抽取器。只输出合法 JSON，不输出解释。"
+                f"你要从多轮聊天中提取关于{companion}自己的生活、未来安排、当前状态、关系承诺的事实候选。"
+                "不要抽取普通寒暄、情绪安慰、比喻、玩笑、用户自己的经历。"
+                "只抽会影响后续聊天、生活模拟、朋友圈或承诺兑现的一致性事实。"
+                "每条 facts 字段：sourcePairId,type,title,summary,startsAt,endsAt,expiresAt,confidence,importance,status。"
+                "type 只能是 schedule_commitment/relationship_commitment/current_state/profile_fact/life_event_hint。"
+                "必须填写 sourcePairId，且必须来自输入 conversationPairs。"
+                "时间必须用 Asia/Shanghai 的 ISO8601；不确定可留空。"
+                "所有相对时间必须以对应 pair 的 conversationTime 为锚点。"
+                "用户生活日以凌晨4点为界：00:00-03:59 仍算前一生活日；例如凌晨2点说“明天”指日历上的今天。"
+                "title 和 summary 不得保留“今天/明天/后天/今晚/下周/周末”等相对日期词，必须改写成绝对日期或具体时间。"
+                "只抽 Alicer 自己的事实，或 Alicer 对用户/关系作出的承诺；用户自己的行程、经历、计划不得变成 Alicer 的事实。"
+                "如果没有精确时间但事实是当天已接受的软计划，填写 metadata.targetDate、metadata.timeHint、metadata.commitmentStrength='accepted'、metadata.flexibility='soft'。"
+                "如果无法确定 actor，丢弃；如果无法确定时间但事实重要，status 用 candidate 且 confidence 不超过 0.6，已接受软计划除外。"
+                "如果新事实修正或替代 activeFacts 中旧事实，在 summary 里说明修正点，并尽量给出 supersedesId。"
+                "status 通常 planned 或 candidate，正在发生用 active。profile_fact 只用于稳定设定变化，必须高置信。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "now": extracted_at.isoformat(),
+                    "extractedAt": extracted_at.isoformat(),
+                    "relativeTimeRule": "以每个 pair 的 conversationTime 为锚点；先减去4小时得到用户生活日，再解析今天/明天/后天。",
+                    "conversationPairs": conversation_pairs,
+                    "currentLifeState": (life_context or {}).get("state") or {},
+                    "activeFacts": existing.get("activeFacts") or [],
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+    try:
+        raw = await llm.complete(messages=prompt, model_settings=merged.get("model") or {})
+        parsed = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
+    except Exception:
+        return []
+    facts = parsed.get("facts") if isinstance(parsed, dict) else None
+    if not isinstance(facts, list):
+        return []
+    saved: list[dict] = []
+    for index, item in enumerate(facts[:24]):
+        if not isinstance(item, dict):
+            continue
+        source_pair_id = str(item.get("sourcePairId") or item.get("pairId") or "")
+        pair = pair_lookup.get(source_pair_id)
+        if pair is None and len(pair_lookup) == 1:
+            source_pair_id, pair = next(iter(pair_lookup.items()))
+        if pair is None:
+            continue
+        user_message, assistant_message, conversation_time = pair
+        normalized = _normalize_fact(
+            item,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            anchor_time=conversation_time,
+            extracted_at=extracted_at,
+        )
+        if normalized is None:
+            continue
+        normalized["fact_id"] = _batch_fact_id(source_pair_id, item, index)
+        normalized.setdefault("related", {})["sourcePairId"] = source_pair_id
+        normalized.setdefault("metadata", {})["sourcePairId"] = source_pair_id
+        normalized.setdefault("metadata", {})["batchExtractedAt"] = extracted_at.isoformat()
+        _supersede_conflicts(db, normalized)
+        saved.append(db.upsert_life_fact(**normalized))
+    if saved and reconcile:
+        from .consistency_service import reconcile_after_life_facts_changed
+
+        await reconcile_after_life_facts_changed(
+            db,
+            llm,
+            settings=merged,
+            facts=saved,
+            reason="life_fact_batch_extraction",
+        )
+    return saved
+
+
 async def refresh_life_facts_from_recent_chat(
     db: Database,
     llm: LlmService,
@@ -217,15 +344,21 @@ async def refresh_life_facts_from_recent_chat(
             if _should_extract(pending_user, message):
                 pairs.append((pending_user, message))
             pending_user = None
+    processed_pair_ids = _processed_pair_ids(db)
+    pending_pairs = [
+        (user_message, assistant_message)
+        for index, (user_message, assistant_message) in enumerate(pairs)
+        if _pair_id(user_message, assistant_message, index=index) not in processed_pair_ids
+    ]
     saved: list[dict] = []
-    for user_message, assistant_message in pairs[-12:]:
+    selected_pairs = pending_pairs[-10:]
+    if selected_pairs:
         saved.extend(
-            await extract_life_facts(
+            await extract_life_facts_batch(
                 db,
                 llm,
                 settings=merged,
-                user_message=user_message,
-                assistant_message=assistant_message,
+                pairs=selected_pairs,
                 life_context={},
                 reconcile=True,
             )
@@ -234,6 +367,9 @@ async def refresh_life_facts_from_recent_chat(
     return {
         "scannedMessages": len(messages),
         "candidatePairs": len(pairs),
+        "pendingPairs": len(pending_pairs),
+        "processedPairs": len(processed_pair_ids),
+        "batchPairs": len(selected_pairs),
         "savedFacts": saved,
         "cleanup": {"before": pre_cleanup, "after": cleanup},
         "world": build_world_context(db, merged),
@@ -313,8 +449,9 @@ def resolve_life_constraints_for_day(
             allowed_locations.update(_locations_from_text(text))
             continue
         if not _touches_day(start, end, day_start, day_end):
-            if fact_type == "life_event_hint":
+            if fact_type == "life_event_hint" or _targets_day(fact, day):
                 soft_hints.append(_public_fact(fact))
+                allowed_locations.update(_locations_from_text(text))
             continue
         if _is_conditional_fact(fact):
             conditional.append(_public_fact(fact))
@@ -592,10 +729,77 @@ def normalize_fact_patch(body: dict) -> dict:
 
 
 def _should_extract(user_message: dict, assistant_message: dict) -> bool:
-    text = f"{user_message.get('content') or ''}\n{assistant_message.get('content') or ''}"
+    user_text = str(user_message.get("content") or "")
+    assistant_text = str(assistant_message.get("content") or "")
+    text = f"{user_text}\n{assistant_text}"
     if len(text.strip()) < 8:
         return False
-    return bool(VALUE_SIGNALS.search(text))
+    return bool(VALUE_SIGNALS.search(text) or ASSISTANT_COMMITMENT_SIGNALS.search(assistant_text))
+
+
+def _pair_id(user_message: dict, assistant_message: dict, *, index: int = 0) -> str:
+    user_id = str(user_message.get("id") or "").strip()
+    assistant_id = str(assistant_message.get("id") or "").strip()
+    if user_id or assistant_id:
+        return f"{user_id}:{assistant_id}"
+    text = f"{index}\n{user_message.get('createdAt') or user_message.get('created_at') or ''}\n{user_message.get('content') or ''}\n{assistant_message.get('content') or ''}"
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:24]
+
+
+def _batch_fact_id(source_pair_id: str, item: dict, index: int) -> str:
+    text = "\n".join(
+        [
+            source_pair_id,
+            str(index),
+            str(item.get("type") or ""),
+            str(item.get("title") or ""),
+            str(item.get("summary") or ""),
+        ]
+    )
+    return f"fact_{hashlib.sha1(text.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _processed_pair_ids(db: Database) -> set[str]:
+    result: set[str] = set()
+    for fact in db.list_life_facts(statuses=VISIBLE_STATUSES, limit=200, include_expired=True):
+        metadata = fact.get("metadata") or {}
+        related = fact.get("related") or {}
+        source_pair_id = str(metadata.get("sourcePairId") or related.get("sourcePairId") or "")
+        if source_pair_id:
+            result.add(source_pair_id)
+            continue
+        user_message_id = str(related.get("userMessageId") or fact.get("sourceMessageId") or "")
+        assistant_message_id = str(related.get("assistantMessageId") or "")
+        if user_message_id or assistant_message_id:
+            result.add(f"{user_message_id}:{assistant_message_id}")
+    return result
+
+
+def _apply_soft_plan_defaults(
+    metadata: dict,
+    *,
+    status: str,
+    confidence: float,
+    importance: float,
+    anchor: dt.datetime,
+    text: str,
+) -> None:
+    if status not in {"planned", "active", "candidate"}:
+        return
+    if importance < 0.5 and confidence < 0.65:
+        return
+    if not (SOFT_PLAN_SIGNALS.search(text) or ASSISTANT_COMMITMENT_SIGNALS.search(text)):
+        return
+    metadata.setdefault("targetDate", _life_day(anchor).isoformat())
+    metadata.setdefault("flexibility", "soft")
+    if any(word in text for word in ("下午", "午后")):
+        metadata.setdefault("timeHint", "afternoon")
+    elif any(word in text for word in ("今晚", "晚上")):
+        metadata.setdefault("timeHint", "evening")
+    elif any(word in text for word in ("等会儿", "一会儿", "待会儿", "稍后", "回头")):
+        metadata.setdefault("timeHint", "soon")
+    if status in {"planned", "active"} or ASSISTANT_COMMITMENT_SIGNALS.search(text):
+        metadata.setdefault("commitmentStrength", "accepted")
 
 
 def _normalize_fact(
@@ -628,6 +832,40 @@ def _normalize_fact(
     status = str(item.get("status") or "").strip() or ("planned" if starts_at else "candidate")
     if status not in {"candidate", "planned", "active", "completed", "cancelled"}:
         status = "candidate"
+    metadata = {
+        "extractor": "life_fact_service",
+        "rawType": item.get("type"),
+        "timeAnchor": anchor.isoformat(),
+        "userLifeDay": _life_day(anchor).isoformat(),
+        "extractedAt": extracted.isoformat(),
+        "rawTitle": raw_title,
+        "rawSummary": raw_summary,
+    }
+    if isinstance(item.get("metadata"), dict):
+        for key in ("targetDate", "timeHint", "commitmentStrength", "flexibility"):
+            value = item["metadata"].get(key)
+            if value not in (None, ""):
+                metadata[key] = str(value)
+    for key in ("targetDate", "timeHint", "commitmentStrength", "flexibility"):
+        value = item.get(key)
+        if value not in (None, ""):
+            metadata[key] = str(value)
+    if starts_at is None and fact_type in {"schedule_commitment", "relationship_commitment", "life_event_hint"}:
+        _apply_soft_plan_defaults(
+            metadata,
+            status=status,
+            confidence=confidence,
+            importance=importance,
+            anchor=anchor,
+            text="\n".join(
+                [
+                    raw_title,
+                    raw_summary,
+                    str(user_message.get("content") or ""),
+                    str(assistant_message.get("content") or ""),
+                ]
+            ),
+        )
     return {
         "fact_id": f"fact_{uuid_like()}",
         "fact_type": fact_type,
@@ -645,15 +883,7 @@ def _normalize_fact(
             "userMessageId": user_message.get("id"),
             "assistantMessageId": assistant_message.get("id"),
         },
-        "metadata": {
-            "extractor": "life_fact_service",
-            "rawType": item.get("type"),
-            "timeAnchor": anchor.isoformat(),
-            "userLifeDay": _life_day(anchor).isoformat(),
-            "extractedAt": extracted.isoformat(),
-            "rawTitle": raw_title,
-            "rawSummary": raw_summary,
-        },
+        "metadata": metadata,
     }
 
 
@@ -958,6 +1188,17 @@ def _touches_day(start: dt.datetime | None, end: dt.datetime | None, day_start: 
         return False
     end = end or start + dt.timedelta(hours=2)
     return start < day_end and end > day_start
+
+
+def _targets_day(fact: dict, day: dt.date) -> bool:
+    metadata = fact.get("metadata") or {}
+    value = metadata.get("targetDate")
+    if value is None:
+        return False
+    try:
+        return dt.date.fromisoformat(str(value)[:10]) == day
+    except ValueError:
+        return False
 
 
 def _blocks_overlap(left: dict, right: dict) -> bool:

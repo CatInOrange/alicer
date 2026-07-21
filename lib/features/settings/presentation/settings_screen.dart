@@ -1604,7 +1604,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final response = await ApiClient(baseUrl: _currentApiBaseUrl()).postJson(
         '/api/life/facts/refresh',
         {'limit': 60, 'settings': _settings.toBackendJson()},
-        timeout: const Duration(seconds: 90),
+        timeout: const Duration(seconds: 180),
       );
       final savedCount = ((response['savedFacts'] as List?) ?? const []).length;
       await _loadLifeFacts();

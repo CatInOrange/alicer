@@ -80,6 +80,14 @@ def _affects_life_projection(fact: dict) -> bool:
         return True
     if fact_type == "profile_fact":
         return True
+    metadata = fact.get("metadata") or {}
+    if (
+        fact_type in {"schedule_commitment", "relationship_commitment", "life_event_hint"}
+        and metadata.get("targetDate")
+        and str(metadata.get("commitmentStrength") or "") in {"accepted", "planned", "confirmed"}
+        and float(fact.get("importance") or 0) >= 0.5
+    ):
+        return True
     return bool(fact.get("startsAt") or fact.get("starts_at") or fact.get("endsAt") or fact.get("ends_at"))
 
 
@@ -89,6 +97,10 @@ def _affected_dates(facts: list[dict]) -> set[dt.date]:
         start = _from_timestamp(fact.get("startsAt") or fact.get("starts_at"))
         end = _from_timestamp(fact.get("endsAt") or fact.get("ends_at"))
         if start is None and end is None:
+            metadata = fact.get("metadata") or {}
+            target_date = _parse_date(metadata.get("targetDate"))
+            if target_date is not None:
+                dates.add(target_date)
             continue
         if start is None:
             start = end
@@ -114,4 +126,13 @@ def _from_timestamp(value: object) -> dt.datetime | None:
             return None
         return dt.datetime.fromtimestamp(float(value), tz=TZ)
     except (TypeError, ValueError, OSError):
+        return None
+
+
+def _parse_date(value: object) -> dt.date | None:
+    if value is None:
+        return None
+    try:
+        return dt.date.fromisoformat(str(value)[:10])
+    except ValueError:
         return None
