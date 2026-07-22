@@ -16,7 +16,13 @@ from app.services.life_fact_service import (
     refresh_life_facts_from_recent_chat,
     resolve_life_constraints_for_day,
 )
-from app.services.life_service import _effective_profile, _fallback_plan, _normalize_plan
+from app.services.life_service import (
+    _build_week_plan,
+    _effective_profile,
+    _fallback_plan,
+    _normalize_plan,
+    choose_moment_life_event,
+)
 
 
 class FakeLlm:
@@ -195,6 +201,7 @@ class LifeFactServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(prompt_payload["conversationPairs"]), 2)
 
     async def test_refresh_batches_candidates_and_skips_processed_pairs(self) -> None:
+        today = dt.datetime.now(TZ).date().isoformat()
         self.db.add_message(message_id="msg_user_old", role="user", content="明天下午去机场吗？")
         self.db.add_message(message_id="msg_assistant_old", role="assistant", content="嗯，明天下午去机场。")
         self.db.upsert_life_fact(
@@ -229,7 +236,7 @@ class LifeFactServiceTest(unittest.IsolatedAsyncioTestCase):
                         "confidence": 0.8,
                         "importance": 0.65,
                         "status": "planned",
-                        "metadata": {"targetDate": "2026-07-21", "commitmentStrength": "accepted", "flexibility": "soft"},
+                        "metadata": {"targetDate": today, "commitmentStrength": "accepted", "flexibility": "soft"},
                     }
                 ]
             }
@@ -474,6 +481,96 @@ class LifeFactServiceTest(unittest.IsolatedAsyncioTestCase):
         roster_text = json.dumps(roster_plan["plannedEvents"], ensure_ascii=False)
         self.assertIn("备勤", roster_text)
         self.assertIn("没有明确航班时不强行执飞", roster_text)
+
+    def test_week_plan_uses_roster_draft_without_hard_facts(self) -> None:
+        start_day = dt.date(2026, 7, 22)
+        profile = {
+            "occupation": "空乘",
+            "workStyle": "roster",
+            "homeBase": "家",
+            "usualPlaces": ["家", "机场"],
+            "routine": {
+                "type": "roster",
+                "workDaysPerMonth": "14-18",
+                "maxConsecutiveWorkDays": 4,
+                "minRestAfterFlightHours": 12,
+                "possibleDuties": ["执飞", "备勤", "培训", "调休", "个人安排/兼职"],
+            },
+        }
+
+        week_plan = _build_week_plan(
+            self.db,
+            settings={},
+            profile=profile,
+            start_day=start_day,
+            recent_events=[],
+        )
+
+        day_types = {item["dayType"] for item in week_plan["days"]}
+        self.assertNotEqual(day_types, {"roster_unknown"})
+        self.assertIn("draft", {item["certainty"] for item in week_plan["days"]})
+        draft_text = json.dumps(week_plan, ensure_ascii=False)
+        self.assertIn("未锁定", draft_text)
+        self.assertNotRegex(draft_text, r"[A-Z]{2}\d{3,4}")
+
+    def test_week_plan_hard_fact_overrides_roster_draft(self) -> None:
+        day = dt.date(2026, 7, 23)
+        self.db.upsert_life_fact(
+            fact_id="fact_flight_hard",
+            fact_type="schedule_commitment",
+            status="planned",
+            title="下午执飞航班",
+            summary="苏晚秋在2026-07-23 15:00执飞一趟航班。",
+            starts_at=dt.datetime(2026, 7, 23, 15, 0, tzinfo=TZ).timestamp(),
+            ends_at=dt.datetime(2026, 7, 23, 19, 0, tzinfo=TZ).timestamp(),
+            confidence=0.9,
+            importance=0.8,
+            source="chat",
+        )
+
+        week_plan = _build_week_plan(
+            self.db,
+            settings={},
+            profile={"occupation": "空乘", "workStyle": "roster", "homeBase": "家", "usualPlaces": ["家", "机场"]},
+            start_day=dt.date(2026, 7, 22),
+            recent_events=[],
+        )
+
+        target = next(item for item in week_plan["days"] if item["date"] == day.isoformat())
+        self.assertEqual(target["confidence"], "hard")
+        self.assertEqual(target["certainty"], "hard")
+        self.assertEqual(target["dayType"], "work")
+        self.assertTrue(target["hardBlocks"])
+
+    def test_draft_aviation_event_is_not_selected_for_moment(self) -> None:
+        slot = dt.datetime(2026, 7, 22, 14, 0, tzinfo=TZ)
+        self.db.add_life_event(
+            event_id="life_draft_aviation",
+            event_time=slot.timestamp(),
+            activity="可能执飞或航班任务",
+            location="机场/航站楼",
+            mood="平稳",
+            energy=0.55,
+            summary="按周草稿去机场附近等待排班。",
+            can_post_moment=True,
+            metadata={"planBlock": {"certainty": "draft", "activity": "可能执飞或航班任务", "location": "机场/航站楼"}},
+        )
+        self.db.add_life_event(
+            event_id="life_normal",
+            event_time=(slot - dt.timedelta(hours=1)).timestamp(),
+            activity="午饭和休息",
+            location="家",
+            mood="放松",
+            energy=0.6,
+            summary="午饭后慢慢休息。",
+            can_post_moment=True,
+            metadata={},
+        )
+
+        selected = choose_moment_life_event(self.db)
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected["id"], "life_normal")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hashlib
 import json
 import logging
 import random
@@ -107,6 +108,7 @@ def build_life_context(db: Database, settings: dict | None = None) -> dict:
         profile=profile,
         start_day=today,
         recent_events=recent,
+        stored_plan=stored.get("plan") or {},
     )
     return {
         "enabled": True,
@@ -174,10 +176,27 @@ async def refresh_life_plan(
 
 def choose_moment_life_event(db: Database) -> dict | None:
     for item in db.list_life_events(limit=18):
-        if item.get("canPostMoment") and not item.get("usedMomentId"):
+        if item.get("canPostMoment") and not item.get("usedMomentId") and not _draft_aviation_event(item):
             return item
     events = db.list_life_events(limit=6)
-    return next((item for item in events if not item.get("usedMomentId")), None)
+    return next((item for item in events if not item.get("usedMomentId") and not _draft_aviation_event(item)), None)
+
+
+def _draft_aviation_event(event: dict) -> bool:
+    metadata = event.get("metadata") or {}
+    plan_block = metadata.get("planBlock") or {}
+    certainty = str(plan_block.get("certainty") or event.get("certainty") or "").strip()
+    text = " ".join(
+        str(item or "")
+        for item in (
+            event.get("activity"),
+            event.get("location"),
+            event.get("summary"),
+            plan_block.get("activity"),
+            plan_block.get("location"),
+        )
+    )
+    return certainty == "draft" and any(word in text for word in ("执飞", "航班", "机场", "备勤", "航站楼", "机组"))
 
 
 async def _advance_one_slot(
@@ -187,6 +206,9 @@ async def _advance_one_slot(
     settings: dict,
     slot: dt.datetime,
 ) -> dict:
+    existing = _life_event_at_slot(db, slot)
+    if existing is not None:
+        return existing
     stored = db.get_life_state() or {}
     profile, memory_ids, profile_updated_at = _current_profile(db, settings, stored)
     life_constraints = resolve_life_constraints_for_day(db, slot.date(), settings)
@@ -207,6 +229,14 @@ async def _advance_one_slot(
         slot=slot,
     )
     normalized = _normalize_event(event, profile=profile, previous_state=previous_state, slot=slot, life_constraints=life_constraints)
+    plan_block = _current_plan_block(plan, slot=slot)
+    if str((plan_block or {}).get("certainty") or "") == "draft":
+        text = f"{normalized.get('activity') or ''} {normalized.get('location') or ''} {normalized.get('summary') or ''}"
+        if any(word in text for word in ("执飞", "航班", "机场", "备勤")):
+            normalized["canPostMoment"] = False
+        normalized["continuity"] = (
+            f"{normalized.get('continuity') or ''}；当前片段参考周草稿，未锁定。"
+        ).strip("；")
     event_id = f"life_{int(slot.timestamp())}_{uuid_like()}"
     saved = db.add_life_event(
         event_id=event_id,
@@ -232,6 +262,7 @@ async def _advance_one_slot(
             ],
             "factConstraints": fact_constraints,
             "lifeConstraints": life_constraints,
+            "planBlock": plan_block or {},
             "routine": profile.get("routine") or {},
         },
     )
@@ -243,6 +274,8 @@ async def _advance_one_slot(
             "mood": saved["mood"],
             "energy": saved["energy"],
             "summary": saved["summary"],
+            "certainty": str((plan_block or {}).get("certainty") or normalized.get("source") or ""),
+            "source": str((plan_block or {}).get("source") or normalized.get("source") or ""),
             "occupation": profile.get("occupation") or "",
             "updatedAt": saved["eventTime"],
             "eventId": saved["id"],
@@ -283,6 +316,7 @@ async def _generate_life_event(
                 "你只输出合法 JSON，不输出解释。"
                 "稳定事实必须来自 profile 和记忆，不要临时改职业、住处、长期习惯。"
                 "今天的活动应优先服从 todayPlan；可以偏离，但必须在 continuity 中说明合理原因。"
+                "todayPlan 中 certainty=draft 的安排只是草稿倾向，不能说成已确认航班、已确认执飞或硬日程。"
                 "可以有随机性：临时加班、摸鱼、散步、买东西、心情波动、和朋友联系等，但必须能从上一小时自然延续。"
                 "字段：activity, location, mood, energy, summary, details, continuity, canPostMoment。"
                 "energy 是 0 到 1；canPostMoment 表示这件事是否适合自然生成朋友圈。"
@@ -376,6 +410,8 @@ async def _generate_daily_plan(
     life_constraints: dict,
 ) -> dict:
     companion = str(((settings.get("companion") or {}).get("name") or "Alice")).strip() or "Alice"
+    weekly_draft = _build_weekly_draft(profile=profile, start_day=slot.date(), recent_events=recent_events, days=7)
+    today_draft = _draft_day_for_date(weekly_draft, slot.date())
     recent_text = "\n".join(
         f"- {item.get('timeLabel')}: {item.get('location')} / {item.get('activity')} / {item.get('summary')}"
         for item in recent_events[-10:]
@@ -387,8 +423,9 @@ async def _generate_daily_plan(
                 f"你是 Alicer 的日计划器，给{companion}生成今天的生活骨架。"
                 "只输出合法 JSON。计划必须服从 profile 中的职业、住处、作息和常去地点。"
                 "同时必须服从 lifeFactConstraints 中来自聊天和记忆的未来安排、承诺和当前事实。"
+                "weeklyDraft 是未锁定生活草稿，只能作为倾向；不得把草稿说成已确认航班或已确认工作。"
                 "不要写成用户的行程。字段：dayTheme, plannedEvents, possibleSurprises, constraints。"
-                "plannedEvents 每项包含 timeRange, activity, location, intent。"
+                "plannedEvents 每项包含 timeRange, activity, location, intent, certainty, source。"
             ),
         },
         {
@@ -400,6 +437,8 @@ async def _generate_daily_plan(
                     "profile": profile,
                     "routine": profile.get("routine") or {},
                     "hardBlocks": life_constraints.get("hardBlocks") or [],
+                    "draftBlocks": (today_draft or {}).get("draftBlocks") or [],
+                    "weeklyDraft": today_draft or {},
                     "conditionalCommitments": life_constraints.get("conditionalCommitments") or [],
                     "conflicts": life_constraints.get("conflicts") or [],
                     "recentEvents": recent_text or "暂无",
@@ -414,13 +453,21 @@ async def _generate_daily_plan(
         raw = await llm.complete(messages=prompt, model_settings=settings.get("model") or {})
         parsed = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
         if isinstance(parsed, dict):
-            return _normalize_plan(parsed, profile=profile, slot=slot, source="llm", life_constraints=life_constraints)
+            return _normalize_plan(parsed, profile=profile, slot=slot, source="llm", life_constraints=life_constraints, weekly_draft=weekly_draft)
     except Exception:
         pass
-    return _normalize_plan(_fallback_plan(profile=profile, slot=slot, recent_events=recent_events), profile=profile, slot=slot, source="fallback", life_constraints=life_constraints)
+    return _normalize_plan(_fallback_plan(profile=profile, slot=slot, recent_events=recent_events), profile=profile, slot=slot, source="fallback", life_constraints=life_constraints, weekly_draft=weekly_draft)
 
 
-def _normalize_plan(plan: dict, *, profile: dict, slot: dt.datetime, source: str, life_constraints: dict | None = None) -> dict:
+def _normalize_plan(
+    plan: dict,
+    *,
+    profile: dict,
+    slot: dt.datetime,
+    source: str,
+    life_constraints: dict | None = None,
+    weekly_draft: dict | None = None,
+) -> dict:
     events = []
     life_constraints = life_constraints or {}
     allowed_locations = set(str(item) for item in life_constraints.get("allowedLocations") or [])
@@ -440,6 +487,7 @@ def _normalize_plan(plan: dict, *, profile: dict, slot: dt.datetime, source: str
                 "source": str(item.get("source") or source or "plan").strip()[:40],
             }
         )
+    events = _apply_draft_blocks(events, life_constraints=life_constraints, weekly_draft=weekly_draft, day=slot.date())
     events = _apply_hard_blocks(events, life_constraints=life_constraints)
     fallback = _fallback_plan(profile=profile, slot=slot)
     return {
@@ -460,6 +508,8 @@ def _normalize_plan(plan: dict, *, profile: dict, slot: dt.datetime, source: str
         "source": source,
         "generatedAt": dt.datetime.now(TZ).isoformat(),
         "hardBlocks": life_constraints.get("hardBlocks") or [],
+        "draftBlocks": (_draft_day_for_date(weekly_draft or {}, slot.date()) or {}).get("draftBlocks") or [],
+        "weeklyDraft": weekly_draft or {},
         "routine": profile.get("routine") or {},
     }
 
@@ -493,10 +543,12 @@ def _build_week_plan(
     profile: dict,
     start_day: dt.date,
     recent_events: list[dict],
+    stored_plan: dict | None = None,
     days: int = 7,
 ) -> dict:
     routine = profile.get("routine") or _routine_for_profile(profile)
     generated_at = dt.datetime.now(TZ).isoformat()
+    draft = _current_weekly_draft(profile=profile, start_day=start_day, recent_events=recent_events, stored_plan=stored_plan, days=days)
     items = []
     for offset in range(max(1, min(days, 14))):
         day = start_day + dt.timedelta(days=offset)
@@ -508,11 +560,20 @@ def _build_week_plan(
             for item in (constraints.get("hardBlocks") or [])[:6]
             if isinstance(item, dict)
         ]
+        draft_day = _draft_day_for_date(draft, day)
+        draft_blocks = [
+            _week_draft_block_summary(item)
+            for item in ((draft_day or {}).get("draftBlocks") or [])[:4]
+            if isinstance(item, dict)
+        ]
+        soft_blocks = _soft_blocks_from_constraints(constraints)
         day_type, confidence, basis = _routine_day_projection(
             routine=routine,
             slot=slot,
             calendar=calendar,
             hard_blocks=hard_blocks,
+            draft_day=draft_day,
+            soft_blocks=soft_blocks,
         )
         if constraints.get("conditionalCommitments"):
             basis.append("有条件承诺")
@@ -527,18 +588,23 @@ def _build_week_plan(
                 "confidence": confidence,
                 "basis": basis[:5],
                 "hardBlocks": hard_blocks,
+                "draftBlocks": draft_blocks,
+                "softBlocks": soft_blocks[:3],
+                "certainty": _week_day_certainty(confidence),
             }
         )
     return {
         "startDate": start_day.isoformat(),
         "days": items,
         "routine": routine,
-        "source": "routine+life_facts",
+        "draft": draft,
+        "source": "facts+weekly_draft+routine",
         "generatedAt": generated_at,
         "rules": [
             "硬日程和事实账本优先于长期节律",
+            "周草稿只表达可变倾向，可被事实账本随时覆盖",
             "固定工作制可按周内/周末回答上不上班",
-            "排班制没有硬事实时只能说排班未锁定，不能编造具体航班",
+            "排班制可生成备勤/培训/执飞倾向草稿，但不能编造航班号、航线或把草稿说成已确认",
         ],
     }
 
@@ -553,12 +619,25 @@ def _week_hard_block_summary(item: dict) -> dict:
     }
 
 
+def _week_draft_block_summary(item: dict) -> dict:
+    return {
+        "timeRange": str(item.get("timeRange") or "").strip()[:40],
+        "activity": str(item.get("activity") or "生活草稿").strip()[:80],
+        "location": str(item.get("location") or "").strip()[:80],
+        "intent": str(item.get("intent") or "").strip()[:160],
+        "certainty": "draft",
+        "source": str(item.get("source") or "weekly_draft").strip()[:40],
+    }
+
+
 def _routine_day_projection(
     *,
     routine: dict,
     slot: dt.datetime,
     calendar: dict,
     hard_blocks: list[dict],
+    draft_day: dict | None = None,
+    soft_blocks: list[dict] | None = None,
 ) -> tuple[str, str, list[str]]:
     hard_text = " ".join(
         f"{item.get('activity') or ''} {item.get('location') or ''}"
@@ -571,6 +650,14 @@ def _routine_day_projection(
             return "rest", "hard", ["事实账本有休息安排"]
         return "scheduled", "hard", ["事实账本有已确定安排"]
 
+    if soft_blocks:
+        text = " ".join(f"{item.get('activity') or ''} {item.get('location') or ''}" for item in soft_blocks)
+        if any(word in text for word in ("休息", "调休", "放假")):
+            return "rest", "planned", ["事实账本有软安排"]
+        if any(word in text for word in ("机场", "航班", "备勤", "培训", "上班", "工作", "太古里", "购物", "见面")):
+            return "scheduled", "planned", ["事实账本有软安排"]
+        return "scheduled", "planned", ["事实账本有软提示"]
+
     routine_type = str(routine.get("type") or "")
     if routine_type in {"weekday_office", "campus"}:
         if slot.weekday() < 5:
@@ -582,12 +669,314 @@ def _routine_day_projection(
             return "flexible_work", "routine", ["弹性工作周内倾向"]
         return "flexible_rest", "routine", ["弹性工作周末倾向休息或个人安排"]
     if routine_type == "roster":
+        if draft_day:
+            draft_type = str(draft_day.get("dayType") or "")
+            basis = [str(item) for item in draft_day.get("basis") or [] if str(item).strip()]
+            return draft_type or "roster_draft", "draft", (basis or ["排班制周草稿"])[:4]
         if _routine_is_rest_day(routine, slot, calendar):
             return "rest", "routine", ["排班制且近期疲劳偏高，倾向恢复"]
         return "roster_unknown", "tentative", ["排班制未见硬航班事实"]
     if slot.weekday() < 5:
         return "work", "routine", ["默认工作日节律"]
     return "rest", "routine", ["默认周末休息"]
+
+
+def _current_weekly_draft(
+    *,
+    profile: dict,
+    start_day: dt.date,
+    recent_events: list[dict],
+    stored_plan: dict | None,
+    days: int,
+) -> dict:
+    existing = (stored_plan or {}).get("weeklyDraft") or {}
+    if _weekly_draft_usable(existing, profile=profile, start_day=start_day, days=days):
+        return existing
+    return _build_weekly_draft(profile=profile, start_day=start_day, recent_events=recent_events, days=days)
+
+
+def _weekly_draft_usable(existing: dict, *, profile: dict, start_day: dt.date, days: int) -> bool:
+    if not isinstance(existing, dict):
+        return False
+    if existing.get("startDate") != start_day.isoformat():
+        return False
+    if existing.get("profileKey") != _profile_draft_key(profile):
+        return False
+    existing_days = [item for item in existing.get("days") or [] if isinstance(item, dict)]
+    return len(existing_days) >= max(1, min(days, 14))
+
+
+def _build_weekly_draft(*, profile: dict, start_day: dt.date, recent_events: list[dict], days: int = 7) -> dict:
+    routine = profile.get("routine") or _routine_for_profile(profile)
+    count = max(1, min(days, 14))
+    if str(routine.get("type") or "") != "roster":
+        return {
+            "startDate": start_day.isoformat(),
+            "days": [],
+            "profileKey": _profile_draft_key(profile),
+            "certainty": "routine",
+            "source": "routine",
+            "generatedAt": dt.datetime.now(TZ).isoformat(),
+            "rules": ["非排班制按长期节律投影，不生成周草稿班表"],
+        }
+
+    rng = random.Random(_stable_seed(f"{_profile_draft_key(profile)}:{start_day.isoformat()}"))
+    fatigue = float(_calendar_state_from_events(recent_events, slot=dt.datetime.combine(start_day, dt.time(9), tzinfo=TZ)).get("fatigueLevel") or 0.35)
+    monthly_range = _workday_range(routine.get("workDaysPerMonth"))
+    target_work_days = max(2, min(count - 1, round(((monthly_range[0] + monthly_range[1]) / 2) / 30 * count)))
+    if fatigue >= 0.72:
+        target_work_days = max(1, target_work_days - 1)
+    max_consecutive = _clamp_int(routine.get("maxConsecutiveWorkDays"), default=4, minimum=2, maximum=6)
+    possible = [str(item) for item in routine.get("possibleDuties") or []]
+    items: list[dict] = []
+    consecutive_work = 0
+    work_count = 0
+    for offset in range(count):
+        day = start_day + dt.timedelta(days=offset)
+        remaining_days = count - offset
+        remaining_work = max(0, target_work_days - work_count)
+        must_work = remaining_work >= remaining_days
+        should_rest = consecutive_work >= max_consecutive or (offset == 0 and fatigue >= 0.72)
+        weekend_rest_bias = day.weekday() >= 5 and rng.random() < 0.35
+        work_probability = 0.55 if remaining_work else 0.0
+        if day.weekday() in {1, 2, 3}:
+            work_probability += 0.08
+        should_work = (must_work or rng.random() < work_probability) and not should_rest and not weekend_rest_bias
+        if should_work:
+            duty = _draft_roster_duty(rng, possible=possible, consecutive_work=consecutive_work)
+            work_count += 1
+            consecutive_work += 1
+            items.append(_roster_draft_day(day, duty=duty, confidence=_draft_confidence(offset)))
+        else:
+            consecutive_work = 0
+            items.append(_roster_rest_draft_day(day, fatigue=fatigue, rng=rng, confidence=_draft_confidence(offset)))
+    return {
+        "startDate": start_day.isoformat(),
+        "days": items,
+        "profileKey": _profile_draft_key(profile),
+        "targetWorkDays": target_work_days,
+        "certainty": "draft",
+        "source": "routine_seeded_draft",
+        "generatedAt": dt.datetime.now(TZ).isoformat(),
+        "rules": [
+            "草稿根据排班制节律、近期疲劳和稳定随机种子生成",
+            "草稿不是事实；硬日程、聊天承诺和新事实随时覆盖它",
+            "草稿不生成航班号、航线或不可更改的机场时间",
+        ],
+    }
+
+
+def _draft_roster_duty(rng: random.Random, *, possible: list[str], consecutive_work: int) -> str:
+    duties = [item for item in possible if item in {"执飞", "备勤", "培训"}]
+    if not duties:
+        duties = ["备勤", "培训", "执飞"]
+    weights = []
+    for duty in duties:
+        if duty == "执飞":
+            weights.append(0.46 if consecutive_work < 2 else 0.34)
+        elif duty == "备勤":
+            weights.append(0.34)
+        else:
+            weights.append(0.2)
+    return rng.choices(duties, weights=weights, k=1)[0]
+
+
+def _roster_draft_day(day: dt.date, *, duty: str, confidence: str) -> dict:
+    if duty == "执飞":
+        day_type = "roster_flight_draft"
+        block = {
+            "timeRange": "13:30-18:30",
+            "activity": "可能执飞或航班任务",
+            "location": "机场/航站楼",
+            "intent": "排班制草稿，只代表可能有飞行任务；未锁定航线和航班号",
+        }
+        basis = ["排班制周草稿", "月工作天数节律", "未见硬航班事实"]
+    elif duty == "培训":
+        day_type = "roster_training_draft"
+        block = {
+            "timeRange": "10:00-16:00",
+            "activity": "可能培训或资质复训",
+            "location": "培训点/机场附近",
+            "intent": "排班制草稿，可被新事实覆盖",
+        }
+        basis = ["排班制周草稿", "培训可选职责", "未锁定"]
+    else:
+        day_type = "roster_standby_draft"
+        block = {
+            "timeRange": "09:30-17:30",
+            "activity": "可能备勤或等待排班确认",
+            "location": "家/备勤点",
+            "intent": "排班制草稿，保持可变，不等于确认出勤",
+        }
+        basis = ["排班制周草稿", "备勤倾向", "未锁定"]
+    return {
+        "date": day.isoformat(),
+        "weekday": "一二三四五六日"[day.weekday()],
+        "dayType": day_type,
+        "confidence": confidence,
+        "basis": basis,
+        "draftBlocks": [{**block, "certainty": "draft", "source": "weekly_draft"}],
+    }
+
+
+def _roster_rest_draft_day(day: dt.date, *, fatigue: float, rng: random.Random, confidence: str) -> dict:
+    personal = rng.random() < 0.42 and fatigue < 0.72
+    if personal:
+        return {
+            "date": day.isoformat(),
+            "weekday": "一二三四五六日"[day.weekday()],
+            "dayType": "personal_draft",
+            "confidence": confidence,
+            "basis": ["排班制周草稿", "个人安排/兼职窗口", "未锁定"],
+            "draftBlocks": [
+                {
+                    "timeRange": "14:00-17:30",
+                    "activity": "可能个人安排或轻量兼职",
+                    "location": "家/附近街区",
+                    "intent": "草稿窗口，可被排班或承诺覆盖",
+                    "certainty": "draft",
+                    "source": "weekly_draft",
+                }
+            ],
+        }
+    return {
+        "date": day.isoformat(),
+        "weekday": "一二三四五六日"[day.weekday()],
+        "dayType": "roster_rest_draft",
+        "confidence": confidence,
+        "basis": ["排班制周草稿", "恢复/调休倾向", "未锁定"],
+        "draftBlocks": [
+            {
+                "timeRange": "10:00-17:00",
+                "activity": "倾向调休和恢复",
+                "location": "家/附近街区",
+                "intent": "飞后或排班间隙的恢复草稿",
+                "certainty": "draft",
+                "source": "weekly_draft",
+            }
+        ],
+    }
+
+
+def _draft_confidence(offset: int) -> str:
+    if offset <= 1:
+        return "draft_high"
+    if offset <= 3:
+        return "draft_medium"
+    return "draft_low"
+
+
+def _workday_range(value: object) -> tuple[int, int]:
+    match = re.search(r"(?P<low>\d{1,2})\D+(?P<high>\d{1,2})", str(value or "14-18"))
+    if match:
+        low = int(match.group("low"))
+        high = int(match.group("high"))
+        return max(1, min(low, high)), max(low, high)
+    return 14, 18
+
+
+def _profile_draft_key(profile: dict) -> str:
+    parts = [
+        str(profile.get("occupation") or ""),
+        str(profile.get("workStyle") or ""),
+        str(profile.get("homeBase") or ""),
+        str((profile.get("routine") or {}).get("type") or ""),
+    ]
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12]
+
+
+def _stable_seed(value: str) -> int:
+    return int(hashlib.sha1(value.encode("utf-8")).hexdigest()[:12], 16)
+
+
+def _draft_day_for_date(weekly_draft: dict, day: dt.date) -> dict | None:
+    if not isinstance(weekly_draft, dict):
+        return None
+    day_text = day.isoformat()
+    for item in weekly_draft.get("days") or []:
+        if isinstance(item, dict) and item.get("date") == day_text:
+            return item
+    return None
+
+
+def _soft_blocks_from_constraints(constraints: dict) -> list[dict]:
+    blocks = []
+    for item in [*(constraints.get("conditionalCommitments") or []), *(constraints.get("softHints") or [])]:
+        if not isinstance(item, dict):
+            continue
+        time_range = _soft_fact_time_range(item)
+        location = _location_from_fact_public(item)
+        if not _soft_fact_is_schedule_like(item, time_range=time_range, location=location):
+            continue
+        blocks.append(
+            {
+                "timeRange": time_range,
+                "activity": str(item.get("title") or "软安排").strip()[:80],
+                "location": location,
+                "intent": str(item.get("summary") or "").strip()[:160],
+                "certainty": "planned" if str(item.get("status") or "") in {"planned", "active"} else "tentative",
+                "source": str(item.get("source") or "life_fact").strip()[:40],
+            }
+        )
+    return blocks
+
+
+def _soft_fact_is_schedule_like(item: dict, *, time_range: str, location: str) -> bool:
+    fact_type = str(item.get("type") or "")
+    status = str(item.get("status") or "")
+    if fact_type not in {"schedule_commitment", "relationship_commitment", "current_state", "life_event_hint"}:
+        return False
+    try:
+        importance = float(item.get("importance") or 0)
+    except (TypeError, ValueError):
+        importance = 0
+    metadata = item.get("metadata") or {}
+    has_target = bool(metadata.get("targetDate") or item.get("startsAt") or item.get("endsAt"))
+    if fact_type == "life_event_hint" and (status == "candidate" or importance < 0.5):
+        return False
+    if has_target:
+        return True
+    if time_range or location:
+        return fact_type in {"schedule_commitment", "relationship_commitment", "current_state"}
+    return False
+
+
+def _soft_fact_time_range(item: dict) -> str:
+    start = _ts_to_dt(item.get("startsAt"))
+    end = _ts_to_dt(item.get("endsAt"))
+    if start and end:
+        return f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
+    if start:
+        return start.strftime("%H:%M")
+    metadata = item.get("metadata") or {}
+    hint = str(metadata.get("timeHint") or "").lower()
+    if "morning" in hint or "上午" in hint:
+        return "09:30-12:00"
+    if "night" in hint or "evening" in hint or "晚上" in hint:
+        return "19:00-21:30"
+    if "afternoon" in hint or "下午" in hint:
+        return "14:00-17:30"
+    return ""
+
+
+def _location_from_fact_public(item: dict) -> str:
+    text = f"{item.get('title') or ''} {item.get('summary') or ''}"
+    for location in ("太古里", "机场", "航站楼", "公司", "学校", "家", "商场", "餐厅", "公园", "附近街区"):
+        if location in text:
+            return location
+    return ""
+
+
+def _week_day_certainty(confidence: str) -> str:
+    if confidence == "hard":
+        return "hard"
+    if confidence == "planned":
+        return "planned"
+    if confidence.startswith("draft"):
+        return "draft"
+    if confidence == "routine":
+        return "routine"
+    return "tentative"
 
 
 def _relative_day_label(day: dt.date, *, start_day: dt.date) -> str:
@@ -603,7 +992,7 @@ def _relative_day_label(day: dt.date, *, start_day: dt.date) -> str:
 
 def _normalize_plan_certainty(value: object, *, default: str) -> str:
     text = str(value or default or "planned").strip().lower()
-    if text in {"hard", "planned", "routine", "tentative"}:
+    if text in {"hard", "planned", "routine", "tentative", "draft"}:
         return text
     if text in {"soft", "maybe", "possible", "candidate"}:
         return "tentative"
@@ -900,7 +1289,9 @@ def _effective_profile(profile: dict, *, life_constraints: dict) -> dict:
         for item in life_constraints.get("profileFacts") or []
     )
     combined = f"{hard_text} {profile_text}"
-    if any(word in combined for word in ("航班", "执飞", "机组", "空乘", "空姐", "机场")):
+    if any(word in combined for word in ("现职业空乘", "当前职业空乘", "空乘", "空姐")) or any(
+        word in hard_text for word in ("航班", "执飞", "机组", "机场")
+    ):
         result["occupation"] = "空乘"
         result["workStyle"] = "roster"
         result["routine"] = _routine_for_profile(result)
@@ -1052,6 +1443,23 @@ def _event_from_hard_block(life_constraints: dict, *, slot: dt.datetime) -> dict
     return None
 
 
+def _current_plan_block(plan: dict, *, slot: dt.datetime) -> dict | None:
+    minute = slot.hour * 60 + slot.minute
+    for item in plan.get("plannedEvents") or []:
+        if not isinstance(item, dict):
+            continue
+        parsed = _parse_time_range_minutes(str(item.get("timeRange") or ""))
+        if parsed is None:
+            continue
+        start, end = parsed
+        current = minute
+        if end > 24 * 60 and current < start:
+            current += 24 * 60
+        if start <= current < end:
+            return item
+    return None
+
+
 def _apply_hard_blocks(events: list[dict], *, life_constraints: dict) -> list[dict]:
     hard_blocks = life_constraints.get("hardBlocks") or []
     if not hard_blocks:
@@ -1071,6 +1479,41 @@ def _apply_hard_blocks(events: list[dict], *, life_constraints: dict) -> list[di
                 "intent": str(block.get("intent") or "硬事实锁定，不能被其他活动覆盖。")[:180],
                 "certainty": "hard",
                 "source": "fact",
+            }
+        )
+    return sorted(kept, key=lambda item: _time_range_start_minutes(str(item.get("timeRange") or "")))
+
+
+def _apply_draft_blocks(
+    events: list[dict],
+    *,
+    life_constraints: dict,
+    weekly_draft: dict | None,
+    day: dt.date,
+) -> list[dict]:
+    if life_constraints.get("hardBlocks"):
+        return events
+    draft_day = _draft_day_for_date(weekly_draft or {}, day)
+    draft_blocks = [
+        _week_draft_block_summary(item)
+        for item in ((draft_day or {}).get("draftBlocks") or [])
+        if isinstance(item, dict)
+    ]
+    if not draft_blocks:
+        return events
+    kept = list(events)
+    for block in draft_blocks:
+        block_range = str(block.get("timeRange") or "")
+        if block_range and any(_time_ranges_overlap(str(event.get("timeRange") or ""), block_range) for event in kept):
+            continue
+        kept.append(
+            {
+                "timeRange": block_range,
+                "activity": str(block.get("activity") or "生活草稿")[:80],
+                "location": str(block.get("location") or "家/附近街区")[:80],
+                "intent": str(block.get("intent") or "周草稿倾向，未锁定。")[:180],
+                "certainty": "draft",
+                "source": "weekly_draft",
             }
         )
     return sorted(kept, key=lambda item: _time_range_start_minutes(str(item.get("timeRange") or "")))
@@ -1096,6 +1539,10 @@ def _plan_satisfies_constraints(plan: dict, life_constraints: dict) -> bool:
         if not matched:
             return False
     return True
+
+
+def _life_event_at_slot(db: Database, slot: dt.datetime) -> dict | None:
+    return db.life_event_at_time(slot.timestamp())
 
 
 def _time_ranges_overlap(left: str, right: str) -> bool:

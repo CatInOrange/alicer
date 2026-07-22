@@ -2571,6 +2571,12 @@ class _WeekPlanDayRow extends StatelessWidget {
     final hardBlocks = ((day['hardBlocks'] as List?) ?? const <dynamic>[])
         .whereType<Map>()
         .toList(growable: false);
+    final draftBlocks = ((day['draftBlocks'] as List?) ?? const <dynamic>[])
+        .whereType<Map>()
+        .toList(growable: false);
+    final softBlocks = ((day['softBlocks'] as List?) ?? const <dynamic>[])
+        .whereType<Map>()
+        .toList(growable: false);
     final basis = ((day['basis'] as List?) ?? const <dynamic>[])
         .map((item) => item.toString())
         .where((item) => item.trim().isNotEmpty)
@@ -2632,6 +2638,38 @@ class _WeekPlanDayRow extends StatelessWidget {
                       ).textTheme.bodySmall?.copyWith(color: colors.textMuted),
                     ),
                   ),
+                if (hardBlocks.isEmpty)
+                  for (final block in softBlocks.take(2))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(
+                        _joinFilled([
+                          '软安排',
+                          (block['timeRange'] ?? '').toString(),
+                          (block['location'] ?? '').toString(),
+                          (block['activity'] ?? '').toString(),
+                        ], separator: ' · '),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: colors.textMuted,
+                        ),
+                      ),
+                    ),
+                if (hardBlocks.isEmpty && softBlocks.isEmpty)
+                  for (final block in draftBlocks.take(2))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(
+                        _joinFilled([
+                          '周草稿',
+                          (block['timeRange'] ?? '').toString(),
+                          (block['location'] ?? '').toString(),
+                          (block['activity'] ?? '').toString(),
+                        ], separator: ' · '),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: colors.textMuted,
+                        ),
+                      ),
+                    ),
               ],
             ),
           ),
@@ -3451,6 +3489,16 @@ String _weekPlanLabel(String dayType) {
       return '休息或个人安排倾向';
     case 'roster_unknown':
       return '排班未锁定';
+    case 'roster_flight_draft':
+      return '可能执飞/航班任务草稿';
+    case 'roster_standby_draft':
+      return '可能备勤草稿';
+    case 'roster_training_draft':
+      return '可能培训草稿';
+    case 'roster_rest_draft':
+      return '调休/恢复草稿';
+    case 'personal_draft':
+      return '个人安排草稿';
   }
   return dayType.isEmpty ? '未判断' : dayType;
 }
@@ -3467,6 +3515,15 @@ IconData _weekPlanIcon(String dayType) {
       return Icons.event_available_outlined;
     case 'roster_unknown':
       return Icons.help_outline_rounded;
+    case 'roster_flight_draft':
+      return Icons.flight_takeoff_rounded;
+    case 'roster_standby_draft':
+      return Icons.pending_actions_outlined;
+    case 'roster_training_draft':
+      return Icons.school_outlined;
+    case 'roster_rest_draft':
+    case 'personal_draft':
+      return Icons.event_note_outlined;
   }
   return Icons.date_range_outlined;
 }

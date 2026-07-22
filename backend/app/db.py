@@ -1230,6 +1230,20 @@ class Database:
             ).fetchone()
         return self._life_event_row(row) if row is not None else None
 
+    def life_event_at_time(self, event_time: float) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM life_events
+                WHERE event_time = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (event_time,),
+            ).fetchone()
+        return self._life_event_row(row) if row is not None else None
+
     def upsert_life_fact(
         self,
         *,

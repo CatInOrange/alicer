@@ -312,6 +312,7 @@ def _format_future_timeline(*, life_context: dict, world_context: dict) -> str:
         "未来回答规则：",
         "- 用户问“等会儿/下午/今晚/明天做什么”时，优先使用这里的时间线；不要脱离计划临场编排。",
         "- 硬日程用确定语气；普通计划用“准备/大概/计划是”；节律推断只能说成倾向。",
+        "- 周草稿/排班草稿只能说“可能/暂定/倾向”，不能说成已确认航班、已确认执飞或硬日程。",
         "- 如果未来安排冲突，承认原计划被硬事实阻断，并自然改期或说明不能同时做到。",
     ]
     if plan:
@@ -418,6 +419,7 @@ def _timeline_event_line(item: dict, *, default_certainty: str) -> str:
     label = {
         "hard": "硬日程",
         "planned": "计划",
+        "draft": "草稿",
         "routine": "节律推断",
         "tentative": "暂定",
     }.get(certainty, certainty)
@@ -435,6 +437,12 @@ def _week_plan_day_line(item: dict) -> str:
     hard_blocks = [
         block for block in (item.get("hardBlocks") or []) if isinstance(block, dict)
     ]
+    draft_blocks = [
+        block for block in (item.get("draftBlocks") or []) if isinstance(block, dict)
+    ]
+    soft_blocks = [
+        block for block in (item.get("softBlocks") or []) if isinstance(block, dict)
+    ]
     basis = [str(text).strip() for text in (item.get("basis") or []) if str(text).strip()]
     label = {
         "work": "上班/工作",
@@ -443,6 +451,11 @@ def _week_plan_day_line(item: dict) -> str:
         "flexible_work": "弹性工作倾向",
         "flexible_rest": "休息或个人安排倾向",
         "roster_unknown": "排班未锁定",
+        "roster_flight_draft": "可能执飞/航班任务草稿",
+        "roster_standby_draft": "可能备勤草稿",
+        "roster_training_draft": "可能培训草稿",
+        "roster_rest_draft": "调休/恢复草稿",
+        "personal_draft": "个人安排草稿",
     }.get(day_type, day_type or "未判断")
     prefix = " ".join(
         part
@@ -464,6 +477,18 @@ def _week_plan_day_line(item: dict) -> str:
             for block in hard_blocks[:3]
         )
         details.append(f"硬日程：{detail}")
+    elif soft_blocks:
+        detail = "；".join(
+            _timeline_event_line(block, default_certainty=str(block.get("certainty") or "planned"))
+            for block in soft_blocks[:2]
+        )
+        details.append(f"软安排：{detail}")
+    elif draft_blocks:
+        detail = "；".join(
+            _timeline_event_line(block, default_certainty="draft")
+            for block in draft_blocks[:2]
+        )
+        details.append(f"周草稿：{detail}")
     return f"{prefix}：{'；'.join(details)}"
 
 

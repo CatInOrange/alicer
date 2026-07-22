@@ -103,6 +103,44 @@ class ProactiveServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse([item for item in candidates if item.intent == "follow_up"])
 
+    def test_draft_aviation_state_is_not_proactively_shared(self) -> None:
+        candidates = _build_candidates(
+            settings=self._settings({"minIdleHoursBeforeChat": 10}),
+            now=dt.datetime.now(TZ),
+            recent_messages=[],
+            recent_moments=[],
+            recent_proactive=[],
+            life_context={
+                "state": {
+                    "activity": "可能执飞或航班任务",
+                    "location": "机场/航站楼",
+                    "summary": "按周草稿等待排班确认。",
+                    "certainty": "draft",
+                },
+                "recentEvents": [
+                    {
+                        "id": "life_draft",
+                        "timeLabel": "14:00",
+                        "activity": "可能执飞或航班任务",
+                        "location": "机场/航站楼",
+                        "summary": "按周草稿等待排班确认。",
+                        "canPostMoment": True,
+                        "metadata": {
+                            "planBlock": {
+                                "certainty": "draft",
+                                "activity": "可能执飞或航班任务",
+                                "location": "机场/航站楼",
+                            }
+                        },
+                    }
+                ],
+            },
+            user_context={},
+            allow_moments=True,
+        )
+
+        self.assertFalse([item for item in candidates if item.intent == "share_life"])
+
     def _settings(self, proactive_overrides: dict | None = None) -> dict:
         proactive = {
             "enabled": True,

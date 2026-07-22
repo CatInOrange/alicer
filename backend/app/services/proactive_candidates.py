@@ -135,8 +135,11 @@ def life_share_candidate(
     if hours_since_event(latest, now) < 5:
         return None
     current_text = " / ".join(item for item in (activity, str(state.get("location") or ""), summary) if item)
+    certainty = str(state.get("certainty") or "").strip()
+    if certainty == "draft" and _looks_like_aviation_work(current_text):
+        return None
     score = 0.58
-    if any(word in current_text for word in ("下班", "午饭", "晚间", "休息", "机场", "航班", "路上")):
+    if any(word in current_text for word in ("下班", "午饭", "晚间", "休息", "路上")):
         score += 0.08
     return ProactiveCandidate(
         event_type="chat",
@@ -155,7 +158,7 @@ def build_moment_candidate(*, life_context: dict) -> ProactiveCandidate | None:
         (
             item
             for item in reversed(recent_events[-8:])
-            if item.get("canPostMoment") and not item.get("usedMomentId")
+            if item.get("canPostMoment") and not item.get("usedMomentId") and not _event_is_draft_aviation(item)
         ),
         None,
     )
@@ -167,7 +170,7 @@ def build_moment_candidate(*, life_context: dict) -> ProactiveCandidate | None:
         if str(item or "").strip()
     )
     score = 0.62
-    if any(word in text for word in ("午饭", "下班", "晚间", "放松", "休息", "街区", "机场")):
+    if any(word in text for word in ("午饭", "下班", "晚间", "放松", "休息", "街区")):
         score += 0.08
     return ProactiveCandidate(
         event_type="moment",
@@ -178,6 +181,27 @@ def build_moment_candidate(*, life_context: dict) -> ProactiveCandidate | None:
         prompt="从当前生活事件自然长出一条朋友圈。",
         metadata={"lifeEvent": event},
     )
+
+
+def _event_is_draft_aviation(event: dict) -> bool:
+    metadata = event.get("metadata") or {}
+    plan_block = metadata.get("planBlock") or {}
+    certainty = str(plan_block.get("certainty") or event.get("certainty") or "").strip()
+    text = " ".join(
+        str(item or "")
+        for item in (
+            event.get("activity"),
+            event.get("location"),
+            event.get("summary"),
+            plan_block.get("activity"),
+            plan_block.get("location"),
+        )
+    )
+    return certainty == "draft" and _looks_like_aviation_work(text)
+
+
+def _looks_like_aviation_work(text: str) -> bool:
+    return any(word in text for word in ("执飞", "航班", "机场", "备勤", "航站楼", "机组"))
 
 
 def candidate_public(candidate: ProactiveCandidate) -> dict:
