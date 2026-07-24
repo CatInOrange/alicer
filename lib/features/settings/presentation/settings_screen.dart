@@ -2577,10 +2577,23 @@ class _WeekPlanDayRow extends StatelessWidget {
     final softBlocks = ((day['softBlocks'] as List?) ?? const <dynamic>[])
         .whereType<Map>()
         .toList(growable: false);
+    final openLoops = ((day['openLoops'] as List?) ?? const <dynamic>[])
+        .whereType<Map>()
+        .toList(growable: false);
+    final risks = ((day['risks'] as List?) ?? const <dynamic>[])
+        .map((item) => item.toString())
+        .where((item) => item.trim().isNotEmpty)
+        .toList(growable: false);
+    final reasons = ((day['reasons'] as List?) ?? const <dynamic>[])
+        .map((item) => item.toString())
+        .where((item) => item.trim().isNotEmpty)
+        .toList(growable: false);
     final basis = ((day['basis'] as List?) ?? const <dynamic>[])
         .map((item) => item.toString())
         .where((item) => item.trim().isNotEmpty)
         .join('、');
+    final summary = _readString(day, 'summary');
+    final certainty = _readString(day, 'certainty');
     final title = _joinFilled([
       _readString(day, 'label'),
       _readString(day, 'date'),
@@ -2609,14 +2622,28 @@ class _WeekPlanDayRow extends StatelessWidget {
                 Text(title, style: Theme.of(context).textTheme.titleSmall),
                 const SizedBox(height: 2),
                 Text(
-                  _weekPlanLabel(_readString(day, 'dayType')),
+                  summary.isEmpty
+                      ? _weekPlanLabel(_readString(day, 'dayType'))
+                      : summary,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+                if (certainty.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    _joinFilled([
+                      _certaintyLabel(certainty),
+                      _budgetLabel(day),
+                    ], separator: ' · '),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: colors.textMuted),
+                  ),
+                ],
                 if (basis.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Text(
                     _joinFilled([
-                      '依据 $basis',
+                      '依据 ${reasons.isEmpty ? basis : reasons.take(3).join('、')}',
                       _readString(day, 'confidence'),
                     ], separator: ' · '),
                     style: Theme.of(
@@ -2625,51 +2652,40 @@ class _WeekPlanDayRow extends StatelessWidget {
                   ),
                 ],
                 for (final block in hardBlocks.take(3))
+                  _PlanLine(
+                    item: Map<String, dynamic>.from(block),
+                    prefix: '硬日程',
+                  ),
+                if (openLoops.isNotEmpty)
+                  for (final loop in openLoops.take(2))
+                    _PlanLine(
+                      item: Map<String, dynamic>.from(loop),
+                      prefix: '待兑现',
+                    ),
+                if (hardBlocks.isEmpty && openLoops.isEmpty)
+                  for (final block in softBlocks.take(2))
+                    _PlanLine(
+                      item: Map<String, dynamic>.from(block),
+                      prefix: '软安排',
+                    ),
+                if (hardBlocks.isEmpty &&
+                    openLoops.isEmpty &&
+                    softBlocks.isEmpty)
+                  for (final block in draftBlocks.take(2))
+                    _PlanLine(
+                      item: Map<String, dynamic>.from(block),
+                      prefix: '草稿',
+                    ),
+                for (final risk in risks.take(2))
                   Padding(
                     padding: const EdgeInsets.only(top: 3),
                     child: Text(
-                      _joinFilled([
-                        (block['timeRange'] ?? '').toString(),
-                        (block['location'] ?? '').toString(),
-                        (block['activity'] ?? '').toString(),
-                      ], separator: ' · '),
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: colors.textMuted),
+                      '风险 $risk',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: _maintenanceSeverityColor(context, 'warning'),
+                      ),
                     ),
                   ),
-                if (hardBlocks.isEmpty)
-                  for (final block in softBlocks.take(2))
-                    Padding(
-                      padding: const EdgeInsets.only(top: 3),
-                      child: Text(
-                        _joinFilled([
-                          '软安排',
-                          (block['timeRange'] ?? '').toString(),
-                          (block['location'] ?? '').toString(),
-                          (block['activity'] ?? '').toString(),
-                        ], separator: ' · '),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: colors.textMuted,
-                        ),
-                      ),
-                    ),
-                if (hardBlocks.isEmpty && softBlocks.isEmpty)
-                  for (final block in draftBlocks.take(2))
-                    Padding(
-                      padding: const EdgeInsets.only(top: 3),
-                      child: Text(
-                        _joinFilled([
-                          '周草稿',
-                          (block['timeRange'] ?? '').toString(),
-                          (block['location'] ?? '').toString(),
-                          (block['activity'] ?? '').toString(),
-                        ], separator: ' · '),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: colors.textMuted,
-                        ),
-                      ),
-                    ),
               ],
             ),
           ),
@@ -2680,9 +2696,10 @@ class _WeekPlanDayRow extends StatelessWidget {
 }
 
 class _PlanLine extends StatelessWidget {
-  const _PlanLine({required this.item});
+  const _PlanLine({required this.item, this.prefix});
 
   final Map<String, dynamic> item;
+  final String? prefix;
 
   @override
   Widget build(BuildContext context) {
@@ -2690,9 +2707,11 @@ class _PlanLine extends StatelessWidget {
       padding: const EdgeInsets.only(top: 4),
       child: Text(
         _joinFilled([
+          prefix ?? '',
           (item['timeRange'] ?? '').toString(),
+          (item['timeHint'] ?? '').toString(),
           (item['location'] ?? '').toString(),
-          (item['activity'] ?? '').toString(),
+          (item['activity'] ?? item['title'] ?? '').toString(),
         ], separator: ' · '),
         style: Theme.of(context).textTheme.bodySmall,
       ),
@@ -3402,6 +3421,32 @@ String _readString(
 
 String _joinFilled(List<String> items, {required String separator}) {
   return items.where((item) => item.trim().isNotEmpty).join(separator);
+}
+
+String _certaintyLabel(String value) {
+  switch (value) {
+    case 'hard':
+      return '已锁定';
+    case 'planned':
+      return '软计划';
+    case 'draft':
+      return '草稿';
+    case 'routine':
+      return '节律';
+    case 'tentative':
+      return '暂定';
+  }
+  return value;
+}
+
+String _budgetLabel(Map<String, dynamic> day) {
+  final energy = _readString(day, 'energyBudget');
+  final social = _readString(day, 'socialBudget');
+  if (energy.isEmpty && social.isEmpty) return '';
+  return _joinFilled([
+    energy.isEmpty ? '' : '体力 ${_formatEnergy(energy)}',
+    social.isEmpty ? '' : '社交 ${_formatEnergy(social)}',
+  ], separator: ' · ');
 }
 
 String _formatEnergy(Object? value) {

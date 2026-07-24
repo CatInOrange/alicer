@@ -437,6 +437,7 @@ async def _generate_daily_plan(
                     "profile": profile,
                     "routine": profile.get("routine") or {},
                     "hardBlocks": life_constraints.get("hardBlocks") or [],
+                    "openLoops": life_constraints.get("openLoops") or [],
                     "draftBlocks": (today_draft or {}).get("draftBlocks") or [],
                     "weeklyDraft": today_draft or {},
                     "conditionalCommitments": life_constraints.get("conditionalCommitments") or [],
@@ -487,8 +488,10 @@ def _normalize_plan(
                 "source": str(item.get("source") or source or "plan").strip()[:40],
             }
         )
+    events = _apply_open_loop_blocks(events, life_constraints=life_constraints)
     events = _apply_draft_blocks(events, life_constraints=life_constraints, weekly_draft=weekly_draft, day=slot.date())
     events = _apply_hard_blocks(events, life_constraints=life_constraints)
+    events, blocked_soft = _annotate_capacity_and_blocked_soft_events(events, life_constraints=life_constraints)
     fallback = _fallback_plan(profile=profile, slot=slot)
     return {
         "date": slot.date().isoformat(),
@@ -505,6 +508,8 @@ def _normalize_plan(
             if str(item).strip()
         ][:6]
         + [str(item.get("message") or "")[:120] for item in (life_constraints.get("conflicts") or [])[:4] if item.get("message")],
+        "openLoops": life_constraints.get("openLoops") or [],
+        "blockedSoftEvents": blocked_soft,
         "source": source,
         "generatedAt": dt.datetime.now(TZ).isoformat(),
         "hardBlocks": life_constraints.get("hardBlocks") or [],
@@ -549,7 +554,9 @@ def _build_week_plan(
     routine = profile.get("routine") or _routine_for_profile(profile)
     generated_at = dt.datetime.now(TZ).isoformat()
     draft = _current_weekly_draft(profile=profile, start_day=start_day, recent_events=recent_events, stored_plan=stored_plan, days=days)
+    weekly_intention = _weekly_intention(profile=profile, routine=routine, recent_events=recent_events, start_day=start_day)
     items = []
+    used_summaries: set[str] = set()
     for offset in range(max(1, min(days, 14))):
         day = start_day + dt.timedelta(days=offset)
         slot = dt.datetime.combine(day, dt.time(9, 0), tzinfo=TZ)
@@ -567,6 +574,7 @@ def _build_week_plan(
             if isinstance(item, dict)
         ]
         soft_blocks = _soft_blocks_from_constraints(constraints)
+        open_loops = _open_loops_from_constraints(constraints)
         day_type, confidence, basis = _routine_day_projection(
             routine=routine,
             slot=slot,
@@ -579,6 +587,20 @@ def _build_week_plan(
             basis.append("有条件承诺")
         if constraints.get("conflicts"):
             basis.append("存在冲突需复核")
+        budgets = _day_budgets(day_type=day_type, confidence=confidence, calendar=calendar, hard_blocks=hard_blocks, soft_blocks=soft_blocks)
+        summary = _week_day_summary(
+            label=_relative_day_label(day, start_day=start_day),
+            day_type=day_type,
+            confidence=confidence,
+            hard_blocks=hard_blocks,
+            soft_blocks=soft_blocks,
+            draft_blocks=draft_blocks,
+            open_loops=open_loops,
+            budgets=budgets,
+            used=used_summaries,
+        )
+        used_summaries.add(summary)
+        reasons = _week_day_reasons(basis=basis, hard_blocks=hard_blocks, soft_blocks=soft_blocks, open_loops=open_loops, calendar=calendar)
         items.append(
             {
                 "date": day.isoformat(),
@@ -587,9 +609,16 @@ def _build_week_plan(
                 "dayType": day_type,
                 "confidence": confidence,
                 "basis": basis[:5],
+                "summary": summary,
+                "energyBudget": budgets["energyBudget"],
+                "socialBudget": budgets["socialBudget"],
+                "workLoad": budgets["workLoad"],
                 "hardBlocks": hard_blocks,
                 "draftBlocks": draft_blocks,
                 "softBlocks": soft_blocks[:3],
+                "openLoops": open_loops[:3],
+                "reasons": reasons[:5],
+                "risks": _week_day_risks(confidence=confidence, hard_blocks=hard_blocks, soft_blocks=soft_blocks, open_loops=open_loops, conflicts=constraints.get("conflicts") or [])[:4],
                 "certainty": _week_day_certainty(confidence),
             }
         )
@@ -597,6 +626,7 @@ def _build_week_plan(
         "startDate": start_day.isoformat(),
         "days": items,
         "routine": routine,
+        "weeklyIntention": weekly_intention,
         "draft": draft,
         "source": "facts+weekly_draft+routine",
         "generatedAt": generated_at,
@@ -731,6 +761,7 @@ def _build_weekly_draft(*, profile: dict, start_day: dt.date, recent_events: lis
     items: list[dict] = []
     consecutive_work = 0
     work_count = 0
+    used_activity_counts: dict[str, int] = {}
     for offset in range(count):
         day = start_day + dt.timedelta(days=offset)
         remaining_days = count - offset
@@ -746,10 +777,28 @@ def _build_weekly_draft(*, profile: dict, start_day: dt.date, recent_events: lis
             duty = _draft_roster_duty(rng, possible=possible, consecutive_work=consecutive_work)
             work_count += 1
             consecutive_work += 1
-            items.append(_roster_draft_day(day, duty=duty, confidence=_draft_confidence(offset)))
+            items.append(
+                _roster_draft_day(
+                    day,
+                    duty=duty,
+                    confidence=_draft_confidence(offset),
+                    rng=rng,
+                    used_activity_counts=used_activity_counts,
+                    consecutive_work=consecutive_work,
+                    fatigue=fatigue,
+                )
+            )
         else:
             consecutive_work = 0
-            items.append(_roster_rest_draft_day(day, fatigue=fatigue, rng=rng, confidence=_draft_confidence(offset)))
+            items.append(
+                _roster_rest_draft_day(
+                    day,
+                    fatigue=fatigue,
+                    rng=rng,
+                    confidence=_draft_confidence(offset),
+                    used_activity_counts=used_activity_counts,
+                )
+            )
     return {
         "startDate": start_day.isoformat(),
         "days": items,
@@ -781,81 +830,137 @@ def _draft_roster_duty(rng: random.Random, *, possible: list[str], consecutive_w
     return rng.choices(duties, weights=weights, k=1)[0]
 
 
-def _roster_draft_day(day: dt.date, *, duty: str, confidence: str) -> dict:
+def _roster_draft_day(
+    day: dt.date,
+    *,
+    duty: str,
+    confidence: str,
+    rng: random.Random,
+    used_activity_counts: dict[str, int],
+    consecutive_work: int,
+    fatigue: float,
+) -> dict:
     if duty == "执飞":
         day_type = "roster_flight_draft"
-        block = {
-            "timeRange": "13:30-18:30",
-            "activity": "可能执飞或航班任务",
-            "location": "机场/航站楼",
-            "intent": "排班制草稿，只代表可能有飞行任务；未锁定航线和航班号",
-        }
+        variants = [
+            ("06:30-12:30", "可能早班航班任务", "机场/航站楼", "早班倾向，需要前一晚早睡；未锁定航线和航班号", "flight:airport:morning"),
+            ("09:30-15:30", "可能短途航班任务", "机场/机组准备区", "白天短途倾向，只代表排班可能，不等于确认执飞", "flight:airport:day"),
+            ("13:30-18:30", "可能下午航班任务", "机场/航站楼", "下午飞行窗口草稿，未锁定航线和航班号", "flight:airport:afternoon"),
+            ("16:00-22:00", "可能晚班航班任务", "机场/机上", "晚班倾向，晚间需要留恢复空间", "flight:airport:evening"),
+            ("11:00-19:30", "可能航前准备加飞行任务", "机场/机组休息室", "偏完整工作日负荷，后续安排要轻", "flight:airport:full"),
+        ]
         basis = ["排班制周草稿", "月工作天数节律", "未见硬航班事实"]
     elif duty == "培训":
         day_type = "roster_training_draft"
-        block = {
-            "timeRange": "10:00-16:00",
-            "activity": "可能培训或资质复训",
-            "location": "培训点/机场附近",
-            "intent": "排班制草稿，可被新事实覆盖",
-        }
+        variants = [
+            ("09:30-12:00", "可能线上课程或资料复习", "家", "轻量培训草稿，适合留出下午弹性", "training:home:morning"),
+            ("10:00-16:00", "可能培训或资质复训", "培训点/机场附近", "排班制草稿，可被新事实覆盖", "training:site:day"),
+            ("14:00-17:30", "可能整理资质材料和制服", "家/附近打印店", "偏事务型培训准备，不是确认出勤", "training:errand:afternoon"),
+            ("13:30-18:00", "可能参加复训安排", "培训点", "下午复训倾向，晚上不适合重安排", "training:site:afternoon"),
+        ]
         basis = ["排班制周草稿", "培训可选职责", "未锁定"]
     else:
         day_type = "roster_standby_draft"
-        block = {
-            "timeRange": "09:30-17:30",
-            "activity": "可能备勤或等待排班确认",
-            "location": "家/备勤点",
-            "intent": "排班制草稿，保持可变，不等于确认出勤",
-        }
+        variants = [
+            ("08:30-10:00", "查看排班并整理飞行包", "家", "早上先等排班消息，后续保持机动", "standby:home:morning"),
+            ("09:30-15:30", "可能居家备勤", "家", "居家等待排班确认，不等于确认出勤", "standby:home:day"),
+            ("12:30-18:00", "可能机场附近备勤", "机场/备勤点", "下午留机场附近机动窗口，未锁定任务", "standby:airport:afternoon"),
+            ("15:00-20:30", "可能晚间备勤窗口", "家/备勤点", "晚间机动倾向，适合减少远距离个人安排", "standby:mixed:evening"),
+        ]
         basis = ["排班制周草稿", "备勤倾向", "未锁定"]
+    block = _pick_roster_variant(rng, variants, used_activity_counts)
+    if consecutive_work >= 3:
+        basis.append("连续工作后需留恢复余量")
+    if fatigue >= 0.62:
+        basis.append("近期疲劳偏高")
     return {
         "date": day.isoformat(),
         "weekday": "一二三四五六日"[day.weekday()],
         "dayType": day_type,
         "confidence": confidence,
         "basis": basis,
+        "summary": _draft_block_sentence(day_type, block),
+        "reasons": basis,
         "draftBlocks": [{**block, "certainty": "draft", "source": "weekly_draft"}],
     }
 
 
-def _roster_rest_draft_day(day: dt.date, *, fatigue: float, rng: random.Random, confidence: str) -> dict:
+def _roster_rest_draft_day(
+    day: dt.date,
+    *,
+    fatigue: float,
+    rng: random.Random,
+    confidence: str,
+    used_activity_counts: dict[str, int],
+) -> dict:
     personal = rng.random() < 0.42 and fatigue < 0.72
     if personal:
+        variants = [
+            ("10:30-12:00", "处理房间整理和洗衣", "家", "把排班间隙里的生活小事补上", "personal:home:morning"),
+            ("14:00-17:30", "可能个人安排或轻量兼职", "家/附近街区", "草稿窗口，可被排班或承诺覆盖", "personal:nearby:afternoon"),
+            ("15:00-18:00", "可能去商场处理小采购", "商场/附近街区", "适合处理一次性 errands，不自动铺满全天", "personal:mall:afternoon"),
+            ("19:00-21:30", "晚间轻量社交或散步", "附近街区", "保留一点生活感，但不压过恢复", "personal:nearby:evening"),
+        ]
+        block = _pick_roster_variant(rng, variants, used_activity_counts)
         return {
             "date": day.isoformat(),
             "weekday": "一二三四五六日"[day.weekday()],
             "dayType": "personal_draft",
             "confidence": confidence,
             "basis": ["排班制周草稿", "个人安排/兼职窗口", "未锁定"],
-            "draftBlocks": [
-                {
-                    "timeRange": "14:00-17:30",
-                    "activity": "可能个人安排或轻量兼职",
-                    "location": "家/附近街区",
-                    "intent": "草稿窗口，可被排班或承诺覆盖",
-                    "certainty": "draft",
-                    "source": "weekly_draft",
-                }
-            ],
+            "summary": _draft_block_sentence("personal_draft", block),
+            "reasons": ["排班制周草稿", "个人安排/兼职窗口", "未锁定"],
+            "draftBlocks": [{**block, "certainty": "draft", "source": "weekly_draft"}],
         }
+    variants = [
+        ("08:30-11:00", "补觉和慢慢恢复", "家", "排班间隙先恢复体力", "rest:home:morning"),
+        ("10:00-13:00", "做饭、洗衣和房间整理", "家", "把生活维护放在休息日白天", "rest:home:late_morning"),
+        ("14:30-17:00", "轻量散步或附近采购", "附近街区", "只安排低负荷活动，避免像全天任务", "rest:nearby:afternoon"),
+        ("19:00-22:00", "晚间恢复和早睡准备", "家", "为后续可能排班留体力", "rest:home:evening"),
+    ]
+    block = _pick_roster_variant(rng, variants, used_activity_counts)
+    basis = ["排班制周草稿", "恢复/调休倾向", "未锁定"]
+    if fatigue >= 0.72:
+        basis.append("近期疲劳高，优先恢复")
     return {
         "date": day.isoformat(),
         "weekday": "一二三四五六日"[day.weekday()],
         "dayType": "roster_rest_draft",
         "confidence": confidence,
-        "basis": ["排班制周草稿", "恢复/调休倾向", "未锁定"],
-        "draftBlocks": [
-            {
-                "timeRange": "10:00-17:00",
-                "activity": "倾向调休和恢复",
-                "location": "家/附近街区",
-                "intent": "飞后或排班间隙的恢复草稿",
-                "certainty": "draft",
-                "source": "weekly_draft",
-            }
-        ],
+        "basis": basis,
+        "summary": _draft_block_sentence("roster_rest_draft", block),
+        "reasons": basis,
+        "draftBlocks": [{**block, "certainty": "draft", "source": "weekly_draft"}],
     }
+
+
+def _pick_roster_variant(rng: random.Random, variants: list[tuple[str, str, str, str, str]], used: dict[str, int]) -> dict:
+    has_unused = any(used.get(key, 0) == 0 for *_prefix, key in variants)
+    weights = [
+        0.0 if has_unused and used.get(key, 0) > 0 else 1.0 / (1 + used.get(key, 0) * 2.5)
+        for *_prefix, key in variants
+    ]
+    time_range, activity, location, intent, key = rng.choices(variants, weights=weights, k=1)[0]
+    used[key] = used.get(key, 0) + 1
+    return {
+        "timeRange": time_range,
+        "activity": activity,
+        "location": location,
+        "intent": intent,
+        "activityKey": key,
+    }
+
+
+def _draft_block_sentence(day_type: str, block: dict) -> str:
+    if day_type.startswith("roster_flight"):
+        return f"{block.get('timeRange')} 留给可能的航班任务，仍等正式排班。"
+    if day_type.startswith("roster_standby"):
+        return f"{block.get('timeRange')} 偏备勤机动，地点按排班消息收紧。"
+    if day_type.startswith("roster_training"):
+        return f"{block.get('timeRange')} 可能处理培训/资质事项，尚未锁定。"
+    if day_type == "personal_draft":
+        return f"{block.get('timeRange')} 适合放一个个人小安排，不是全天计划。"
+    return f"{block.get('timeRange')} 以恢复为主，给后续排班留余量。"
 
 
 def _draft_confidence(offset: int) -> str:
@@ -919,6 +1024,215 @@ def _soft_blocks_from_constraints(constraints: dict) -> list[dict]:
             }
         )
     return blocks
+
+
+def _open_loops_from_constraints(constraints: dict) -> list[dict]:
+    loops = []
+    for item in constraints.get("openLoops") or []:
+        if not isinstance(item, dict):
+            continue
+        loops.append(
+            {
+                "id": item.get("id"),
+                "title": str(item.get("title") or "待兑现事项").strip()[:80],
+                "summary": str(item.get("summary") or "").strip()[:160],
+                "timeHint": str(item.get("timeHint") or "").strip()[:40],
+                "timeRange": str(item.get("timeRange") or "").strip()[:40],
+                "certainty": str(item.get("certainty") or "planned").strip()[:20],
+                "whyToday": str(item.get("whyToday") or "来自聊天承诺，今天需要考虑。").strip()[:180],
+            }
+        )
+    return loops
+
+
+def _apply_open_loop_blocks(events: list[dict], *, life_constraints: dict) -> list[dict]:
+    loops = _open_loops_from_constraints(life_constraints)
+    if not loops:
+        return events
+    kept = list(events)
+    for loop in loops:
+        time_range = str(loop.get("timeRange") or _time_range_from_hint(loop.get("timeHint")) or "14:00-17:30")
+        if any(_same_open_loop(event, loop) for event in kept):
+            continue
+        if any(_time_ranges_overlap(str(event.get("timeRange") or ""), time_range) and str(event.get("certainty") or "") == "hard" for event in kept):
+            continue
+        kept.append(
+            {
+                "timeRange": time_range,
+                "activity": str(loop.get("title") or "兑现聊天承诺")[:80],
+                "location": _location_from_open_loop(loop),
+                "intent": str(loop.get("summary") or loop.get("whyToday") or "聊天里答应过的事，安排一次即可。")[:180],
+                "certainty": str(loop.get("certainty") or "planned")[:20],
+                "source": "open_loop",
+                "sourceFactId": loop.get("id"),
+            }
+        )
+    return sorted(kept, key=lambda item: _time_range_start_minutes(str(item.get("timeRange") or "")))
+
+
+def _time_range_from_hint(value: object) -> str:
+    hint = str(value or "").lower()
+    if "morning" in hint or "上午" in hint:
+        return "09:30-12:00"
+    if "night" in hint or "evening" in hint or "晚上" in hint:
+        return "19:00-21:30"
+    if "afternoon" in hint or "下午" in hint:
+        return "14:00-17:30"
+    return ""
+
+
+def _same_open_loop(event: dict, loop: dict) -> bool:
+    source_id = str(loop.get("id") or "")
+    if source_id and str(event.get("sourceFactId") or "") == source_id:
+        return True
+    return _text_overlap(str(event.get("activity") or ""), str(loop.get("title") or "")) >= 3
+
+
+def _location_from_open_loop(loop: dict) -> str:
+    text = f"{loop.get('title') or ''} {loop.get('summary') or ''}"
+    for location in ("太古里", "商场", "机场", "航站楼", "公司", "学校", "家", "餐厅", "公园", "附近街区"):
+        if location in text:
+            return location
+    return "附近街区"
+
+
+def _annotate_capacity_and_blocked_soft_events(events: list[dict], *, life_constraints: dict) -> tuple[list[dict], list[dict]]:
+    hard_ranges = [str(block.get("timeRange") or "") for block in life_constraints.get("hardBlocks") or []]
+    conflicts = life_constraints.get("conflicts") or []
+    blocked: list[dict] = []
+    result: list[dict] = []
+    for event in events:
+        event_range = str(event.get("timeRange") or "")
+        is_soft = str(event.get("source") or "") in {"open_loop", "life_fact"} or str(event.get("certainty") or "") in {"planned", "tentative"}
+        if is_soft and hard_ranges and any(_time_ranges_overlap(event_range, hard_range) for hard_range in hard_ranges):
+            blocked.append(
+                {
+                    "activity": event.get("activity"),
+                    "timeRange": event_range,
+                    "sourceFactId": event.get("sourceFactId"),
+                    "reason": "被硬日程阻断，需要改期或在聊天里及时解释。",
+                }
+            )
+            continue
+        result.append(event)
+    for conflict in conflicts[:8]:
+        blocked.append(
+            {
+                "sourceFactId": conflict.get("factId"),
+                "timeRange": "",
+                "activity": "聊天承诺冲突",
+                "reason": str(conflict.get("message") or "")[:180],
+            }
+        )
+    for loop in _open_loops_from_constraints(life_constraints):
+        loop_range = str(loop.get("timeRange") or _time_range_from_hint(loop.get("timeHint")) or "")
+        if not loop_range or not hard_ranges:
+            continue
+        if any(_time_ranges_overlap(loop_range, hard_range) for hard_range in hard_ranges):
+            blocked.append(
+                {
+                    "sourceFactId": loop.get("id"),
+                    "timeRange": loop_range,
+                    "activity": loop.get("title"),
+                    "reason": "聊天承诺的时间窗撞上硬日程，需要主动说明改期或换轻量兑现方式。",
+                }
+            )
+    return result[:10], blocked[:8]
+
+
+def _weekly_intention(*, profile: dict, routine: dict, recent_events: list[dict], start_day: dt.date) -> dict:
+    calendar = _calendar_state_from_events(recent_events, slot=dt.datetime.combine(start_day, dt.time(9), tzinfo=TZ))
+    routine_type = str(routine.get("type") or "")
+    fatigue = float(calendar.get("fatigueLevel") or 0.35)
+    if routine_type == "roster":
+        theme = "排班不确定的一周，先保留机动窗口，再把承诺和恢复安排进去。"
+        needs = {"work": 0.65, "rest": 0.72 if fatigue >= 0.62 else 0.52, "relationship": 0.55, "errands": 0.42}
+    elif routine_type in {"weekday_office", "campus"}:
+        theme = "稳定工作/学习周，周内先保证核心义务，周末再承接个人安排。"
+        needs = {"work": 0.8, "rest": 0.45, "relationship": 0.45, "errands": 0.35}
+    else:
+        theme = "弹性生活周，工作推进和个人事务都要留出可调整空间。"
+        needs = {"work": 0.58, "rest": 0.5, "relationship": 0.5, "errands": 0.45}
+    return {
+        "theme": theme,
+        "anchors": [str(profile.get("occupation") or ""), str(profile.get("homeBase") or "")],
+        "needs": needs,
+        "openLoopsPolicy": "聊天承诺按一次性待办处理；完成或被阻断后必须反馈，不自动铺满多天。",
+    }
+
+
+def _day_budgets(*, day_type: str, confidence: str, calendar: dict, hard_blocks: list[dict], soft_blocks: list[dict]) -> dict:
+    fatigue = float(calendar.get("fatigueLevel") or 0.35)
+    is_work = day_type in {"work", "roster_flight_draft", "roster_standby_draft", "roster_training_draft", "flexible_work"}
+    hard_load = min(0.35, len(hard_blocks) * 0.14)
+    soft_load = min(0.24, len(soft_blocks) * 0.08)
+    work_load = 0.72 if is_work else 0.18
+    if confidence == "hard":
+        work_load = max(work_load, 0.82)
+    energy = max(0.18, min(1.0, 0.82 - fatigue * 0.35 - hard_load - soft_load))
+    social = max(0.12, min(0.9, 0.62 - work_load * 0.28 - fatigue * 0.2))
+    return {
+        "energyBudget": round(energy, 2),
+        "socialBudget": round(social, 2),
+        "workLoad": round(work_load, 2),
+    }
+
+
+def _week_day_summary(
+    *,
+    label: str,
+    day_type: str,
+    confidence: str,
+    hard_blocks: list[dict],
+    soft_blocks: list[dict],
+    draft_blocks: list[dict],
+    open_loops: list[dict],
+    budgets: dict,
+    used: set[str],
+) -> str:
+    if hard_blocks:
+        main = f"{label}被硬日程锁住，重点是{hard_blocks[0].get('activity')}"
+    elif open_loops:
+        main = f"{label}适合兑现“{open_loops[0].get('title')}”，安排一次就够"
+    elif soft_blocks:
+        main = f"{label}有软安排，先给{soft_blocks[0].get('activity')}留窗口"
+    elif draft_blocks:
+        main = f"{label}{_draft_block_sentence(day_type, draft_blocks[0])}"
+    elif day_type in {"work", "flexible_work"}:
+        main = f"{label}按稳定工作节律推进，晚上留给恢复"
+    else:
+        main = f"{label}偏休息和生活维护，不塞重安排"
+    suffix = "体力偏紧" if float(budgets.get("energyBudget") or 0) < 0.42 else "节奏可调整"
+    summary = f"{main}。{suffix}。"
+    if summary not in used:
+        return summary
+    return f"{main}，但换一个时间/地点处理，避免连续重复。{suffix}。"
+
+
+def _week_day_reasons(*, basis: list[str], hard_blocks: list[dict], soft_blocks: list[dict], open_loops: list[dict], calendar: dict) -> list[str]:
+    reasons = list(basis)
+    if hard_blocks:
+        reasons.append("硬事实优先，其他安排不得覆盖")
+    if open_loops:
+        reasons.append("聊天承诺进入待兑现事项")
+    if soft_blocks:
+        reasons.append("软计划只安排一次，未完成再改期")
+    if float(calendar.get("fatigueLevel") or 0) >= 0.62:
+        reasons.append("近期疲劳偏高")
+    return list(dict.fromkeys(item for item in reasons if item))
+
+
+def _week_day_risks(*, confidence: str, hard_blocks: list[dict], soft_blocks: list[dict], open_loops: list[dict], conflicts: list[dict]) -> list[str]:
+    risks = []
+    if confidence.startswith("draft"):
+        risks.append("草稿不能说成已确认")
+    if hard_blocks and (soft_blocks or open_loops):
+        risks.append("软安排可能被硬日程挤掉")
+    for conflict in conflicts[:2]:
+        message = str(conflict.get("message") or "").strip()
+        if message:
+            risks.append(message[:120])
+    return risks
 
 
 def _soft_fact_is_schedule_like(item: dict, *, time_range: str, location: str) -> bool:
@@ -1567,6 +1881,16 @@ def _parse_time_range_minutes(value: str) -> tuple[int, int] | None:
     if end <= start:
         end += 24 * 60
     return start, end
+
+
+def _text_overlap(left: str, right: str) -> int:
+    left_words = {item for item in re.split(r"\W+", left.lower()) if len(item) >= 2}
+    right_words = {item for item in re.split(r"\W+", right.lower()) if len(item) >= 2}
+    if left_words and right_words:
+        return len(left_words & right_words)
+    left_chars = set(left)
+    right_chars = set(right)
+    return len({item for item in left_chars & right_chars if not item.isspace()})
 
 
 def _ts_to_dt(value: object) -> dt.datetime | None:

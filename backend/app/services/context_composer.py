@@ -444,6 +444,11 @@ def _week_plan_day_line(item: dict) -> str:
         block for block in (item.get("softBlocks") or []) if isinstance(block, dict)
     ]
     basis = [str(text).strip() for text in (item.get("basis") or []) if str(text).strip()]
+    summary = str(item.get("summary") or "").strip()
+    open_loops = [
+        loop for loop in (item.get("openLoops") or []) if isinstance(loop, dict)
+    ]
+    risks = [str(text).strip() for text in (item.get("risks") or []) if str(text).strip()]
     label = {
         "work": "上班/工作",
         "rest": "休息",
@@ -466,7 +471,7 @@ def _week_plan_day_line(item: dict) -> str:
         )
         if part
     )
-    details = [label]
+    details = [summary or label]
     if confidence:
         details.append(f"依据 {confidence}")
     if basis:
@@ -477,6 +482,12 @@ def _week_plan_day_line(item: dict) -> str:
             for block in hard_blocks[:3]
         )
         details.append(f"硬日程：{detail}")
+    elif open_loops:
+        detail = "；".join(
+            f"{str(loop.get('timeRange') or loop.get('timeHint') or '择时').strip()} {str(loop.get('title') or '待兑现事项').strip()}"
+            for loop in open_loops[:2]
+        )
+        details.append(f"待兑现：{detail}")
     elif soft_blocks:
         detail = "；".join(
             _timeline_event_line(block, default_certainty=str(block.get("certainty") or "planned"))
@@ -484,11 +495,9 @@ def _week_plan_day_line(item: dict) -> str:
         )
         details.append(f"软安排：{detail}")
     elif draft_blocks:
-        detail = "；".join(
-            _timeline_event_line(block, default_certainty="draft")
-            for block in draft_blocks[:2]
-        )
-        details.append(f"周草稿：{detail}")
+        details.append("周草稿：只保留倾向，不按具体时间地点回答，除非用户问调试信息")
+    if risks:
+        details.append("注意：" + "、".join(risks[:2]))
     return f"{prefix}：{'；'.join(details)}"
 
 

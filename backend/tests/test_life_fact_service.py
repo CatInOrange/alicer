@@ -16,8 +16,10 @@ from app.services.life_fact_service import (
     refresh_life_facts_from_recent_chat,
     resolve_life_constraints_for_day,
 )
+from app.services.consistency_service import reconcile_after_life_facts_changed
 from app.services.life_service import (
     _build_week_plan,
+    _build_weekly_draft,
     _effective_profile,
     _fallback_plan,
     _normalize_plan,
@@ -404,6 +406,28 @@ class LifeFactServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(constraints["conflicts"])
         self.assertEqual(constraints["conflicts"][0]["factId"], "fact_coffee")
 
+    def test_uncertain_soft_airport_plan_stays_open_loop_not_hard_schedule(self) -> None:
+        day = dt.date(2026, 7, 17)
+        self.db.upsert_life_fact(
+            fact_id="fact_soft_airport",
+            fact_type="schedule_commitment",
+            status="planned",
+            title="可能下午去机场附近等排班",
+            summary="苏晚秋只是可能在2026-07-17下午去机场附近等排班，还没有确认。",
+            starts_at=dt.datetime(2026, 7, 17, 14, 0, tzinfo=TZ).timestamp(),
+            ends_at=dt.datetime(2026, 7, 17, 17, 0, tzinfo=TZ).timestamp(),
+            confidence=0.72,
+            importance=0.7,
+            source="chat",
+            metadata={"commitmentStrength": "accepted", "flexibility": "soft", "timeHint": "afternoon"},
+        )
+
+        constraints = resolve_life_constraints_for_day(self.db, day, {})
+
+        self.assertFalse(constraints["hardBlocks"])
+        self.assertTrue(constraints["openLoops"])
+        self.assertIn("可能下午去机场", constraints["openLoops"][0]["title"])
+
     def test_normalize_plan_inserts_hard_blocks_and_removes_conflicting_soft_events(self) -> None:
         day = dt.date(2026, 7, 17)
         start = dt.datetime(2026, 7, 17, 15, 0, tzinfo=TZ).timestamp()
@@ -440,6 +464,37 @@ class LifeFactServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("前往机场", text)
         self.assertIn('"certainty": "hard"', text)
         self.assertNotIn("去温泉镇送咖啡", text)
+
+    def test_weekend_soft_commitment_is_scheduled_once_in_week_plan(self) -> None:
+        saturday = dt.date(2026, 7, 25)
+        self.db.upsert_life_fact(
+            fact_id="fact_jeans",
+            fact_type="relationship_commitment",
+            status="planned",
+            title="周末去太古里挑牛仔裤并拍照",
+            summary="苏晚秋答应周末找一个下午去太古里挑微喇牛仔裤，并拍照给用户看。",
+            confidence=0.82,
+            importance=0.68,
+            source="chat",
+            metadata={
+                "targetDate": saturday.isoformat(),
+                "timeHint": "afternoon",
+                "commitmentStrength": "accepted",
+                "flexibility": "soft",
+            },
+        )
+
+        week_plan = _build_week_plan(
+            self.db,
+            settings={},
+            profile={"occupation": "空乘", "workStyle": "roster", "homeBase": "家", "usualPlaces": ["家", "机场", "太古里"]},
+            start_day=dt.date(2026, 7, 24),
+            recent_events=[],
+        )
+
+        loop_days = [item for item in week_plan["days"] if item.get("openLoops")]
+        self.assertEqual([item["date"] for item in loop_days], [saturday.isoformat()])
+        self.assertIn("安排一次", loop_days[0]["summary"])
 
     def test_effective_profile_and_routine_keep_flight_jobs_and_rest_days_coherent(self) -> None:
         day = dt.date(2026, 7, 17)
@@ -512,6 +567,65 @@ class LifeFactServiceTest(unittest.IsolatedAsyncioTestCase):
         draft_text = json.dumps(week_plan, ensure_ascii=False)
         self.assertIn("未锁定", draft_text)
         self.assertNotRegex(draft_text, r"[A-Z]{2}\d{3,4}")
+
+    def test_weekly_roster_draft_uses_variant_pool_without_duplicate_blocks(self) -> None:
+        start_day = dt.date(2026, 7, 22)
+        profile = {
+            "occupation": "空乘",
+            "workStyle": "roster",
+            "homeBase": "家",
+            "routine": {
+                "type": "roster",
+                "workDaysPerMonth": "14-18",
+                "maxConsecutiveWorkDays": 4,
+                "possibleDuties": ["执飞", "备勤", "培训", "调休", "个人安排/兼职"],
+            },
+        }
+
+        draft = _build_weekly_draft(profile=profile, start_day=start_day, recent_events=[], days=7)
+        keys = [
+            block.get("activityKey")
+            for day in draft["days"]
+            for block in day.get("draftBlocks", [])
+            if block.get("activityKey")
+        ]
+
+        self.assertEqual(len(keys), len(set(keys)))
+        summaries = [item.get("summary") for item in draft["days"]]
+        self.assertEqual(len(summaries), len(set(summaries)))
+
+    async def test_future_fact_refreshes_week_projection_without_today_refresh(self) -> None:
+        future_day = dt.datetime.now(TZ).date() + dt.timedelta(days=3)
+        fact = self.db.upsert_life_fact(
+            fact_id="fact_future_jeans",
+            fact_type="relationship_commitment",
+            status="planned",
+            title="去太古里挑牛仔裤并拍照",
+            summary="苏晚秋答应找一个下午去太古里挑牛仔裤，并拍照给用户看。",
+            confidence=0.82,
+            importance=0.68,
+            source="chat",
+            metadata={
+                "targetDate": future_day.isoformat(),
+                "timeHint": "afternoon",
+                "commitmentStrength": "accepted",
+                "flexibility": "soft",
+            },
+        )
+
+        result = await reconcile_after_life_facts_changed(
+            self.db,
+            FakeLlm({"dayTheme": "不用调用", "plannedEvents": []}),  # type: ignore[arg-type]
+            settings={"life": {"enabled": True}},
+            facts=[fact],
+            reason="test_future",
+        )
+
+        self.assertFalse(result["refreshedTodayPlan"])
+        self.assertTrue(result["refreshedWeekProjection"])
+        projection = ((self.db.get_life_state() or {}).get("plan") or {}).get("weekPlanProjection") or {}
+        target = next(item for item in projection["days"] if item["date"] == future_day.isoformat())
+        self.assertTrue(target["openLoops"])
 
     def test_week_plan_hard_fact_overrides_roster_draft(self) -> None:
         day = dt.date(2026, 7, 23)

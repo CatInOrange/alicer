@@ -65,6 +65,7 @@ async def reconcile_after_life_facts_changed(
         result["planGeneratedAt"] = ((refreshed.get("plan") or {}).get("generatedAt") or "")
     else:
         result["reason"] = "affected_date_not_today"
+        result.update(_refresh_week_projection(db, settings=merged))
     db.upsert_scheduled_job(job_key="consistency:life_projection:last", result=result)
     return result
 
@@ -118,6 +119,47 @@ def _affected_dates(facts: list[dict]) -> set[dt.date]:
 
 def _has_profile_fact(facts: list[dict]) -> bool:
     return any(str(fact.get("type") or fact.get("fact_type") or "") == "profile_fact" for fact in facts)
+
+
+def _refresh_week_projection(db: Database, *, settings: dict) -> dict:
+    from .life_service import build_life_context
+
+    context = build_life_context(db, settings)
+    if not context.get("enabled"):
+        return {"refreshedWeekProjection": False, "weekProjectionReason": "life_disabled"}
+    stored = db.get_life_state() or {}
+    plan = dict(stored.get("plan") or {})
+    week_plan = context.get("weekPlan") or {}
+    plan["weekPlanProjection"] = {
+        "startDate": week_plan.get("startDate"),
+        "generatedAt": week_plan.get("generatedAt"),
+        "source": week_plan.get("source"),
+        "days": [
+            {
+                "date": item.get("date"),
+                "dayType": item.get("dayType"),
+                "certainty": item.get("certainty"),
+                "summary": item.get("summary"),
+                "openLoops": item.get("openLoops") or [],
+                "risks": item.get("risks") or [],
+            }
+            for item in (week_plan.get("days") or [])[:7]
+            if isinstance(item, dict)
+        ],
+    }
+    if week_plan.get("draft"):
+        plan["weeklyDraft"] = week_plan.get("draft")
+    db.save_life_state(
+        profile=context.get("profile") or stored.get("profile") or {},
+        state=context.get("state") or stored.get("state") or {},
+        plan=plan,
+        profile_updated_at=context.get("profileUpdatedAt") or stored.get("profileUpdatedAt"),
+        plan_date=str(stored.get("planDate") or ""),
+    )
+    return {
+        "refreshedWeekProjection": True,
+        "weekPlanGeneratedAt": week_plan.get("generatedAt") or "",
+    }
 
 
 def _from_timestamp(value: object) -> dt.datetime | None:

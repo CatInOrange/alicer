@@ -43,6 +43,8 @@ HARD_SCHEDULE_KEYWORDS = (
     "面试",
 )
 CONDITIONAL_KEYWORDS = ("如果", "若", "假如", "要是", "否则", "没出现", "来接", "接机")
+UNCERTAIN_SCHEDULE_KEYWORDS = ("可能", "也许", "大概", "暂定", "倾向", "待定", "未定", "不确定", "看排班", "等排班")
+CONFIRMED_SCHEDULE_KEYWORDS = ("确定", "已定", "确认", "必须", "要去", "得去", "一定", "锁定", "航班号")
 AVIATION_KEYWORDS = ("航班", "执飞", "机场", "机组", "空乘", "空姐", "值机", "落地", "登机", "备勤")
 LONG_TERM_FACT_KEYWORDS = (
     "记住",
@@ -436,6 +438,7 @@ def resolve_life_constraints_for_day(
     hard_blocks: list[dict] = []
     conditional: list[dict] = []
     soft_hints: list[dict] = []
+    open_loops: list[dict] = []
     profile_facts: list[dict] = []
     allowed_locations: set[str] = set()
 
@@ -450,7 +453,10 @@ def resolve_life_constraints_for_day(
             continue
         if not _touches_day(start, end, day_start, day_end):
             if fact_type == "life_event_hint" or _targets_day(fact, day):
-                soft_hints.append(_public_fact(fact))
+                public = _public_fact(fact)
+                soft_hints.append(public)
+                if _is_open_loop_fact(fact):
+                    open_loops.append(_open_loop_from_fact(public, day=day))
                 allowed_locations.update(_locations_from_text(text))
             continue
         if _is_conditional_fact(fact):
@@ -463,7 +469,10 @@ def resolve_life_constraints_for_day(
             for block in blocks:
                 allowed_locations.update(_locations_from_text(f"{block.get('activity') or ''} {block.get('location') or ''}"))
             continue
-        soft_hints.append(_public_fact(fact))
+        public = _public_fact(fact)
+        soft_hints.append(public)
+        if _is_open_loop_fact(fact):
+            open_loops.append(_open_loop_from_fact(public, day=day))
         allowed_locations.update(_locations_from_text(text))
 
     hard_blocks = _dedupe_hard_blocks(hard_blocks)
@@ -473,10 +482,11 @@ def resolve_life_constraints_for_day(
         "hardBlocks": hard_blocks,
         "conditionalCommitments": conditional[:16],
         "softHints": soft_hints[:16],
+        "openLoops": open_loops[:12],
         "profileFacts": profile_facts[:12],
         "conflicts": conflicts[:24],
         "allowedLocations": sorted(allowed_locations),
-        "summary": _format_constraint_summary(hard_blocks, conditional, soft_hints, conflicts),
+        "summary": _format_constraint_summary(hard_blocks, conditional, soft_hints, conflicts, open_loops),
     }
 
 
@@ -1017,22 +1027,81 @@ def _is_hard_schedule_fact(fact: dict) -> bool:
     confidence = float(fact.get("confidence") or 0)
     importance = float(fact.get("importance") or 0)
     text = f"{fact.get('title') or ''} {fact.get('summary') or ''}"
+    metadata = fact.get("metadata") or {}
+    strength = str(metadata.get("commitmentStrength") or "").strip().lower()
+    flexibility = str(metadata.get("flexibility") or "").strip().lower()
+    if flexibility == "soft" or strength in {"accepted", "planned"}:
+        if any(word in text for word in UNCERTAIN_SCHEDULE_KEYWORDS) or fact_type == "relationship_commitment":
+            return False
+    confirmed = strength == "confirmed" or any(word in text for word in CONFIRMED_SCHEDULE_KEYWORDS)
     if any(word in text for word in HARD_SCHEDULE_KEYWORDS):
-        return confidence >= 0.6 or importance >= 0.6
+        return confirmed or confidence >= 0.78 or importance >= 0.78
     if fact.get("endsAt") is not None:
         start = _from_timestamp(fact.get("startsAt"))
         end = _from_timestamp(fact.get("endsAt"))
         if start and end and (end - start) <= dt.timedelta(hours=14):
-            return confidence >= 0.75 and importance >= 0.65
+            return confirmed or (confidence >= 0.82 and importance >= 0.72)
     return False
 
 
 def _is_conditional_fact(fact: dict) -> bool:
-    fact_type = str(fact.get("type") or "")
     text = f"{fact.get('title') or ''} {fact.get('summary') or ''}"
-    if fact_type == "relationship_commitment":
-        return True
     return any(word in text for word in CONDITIONAL_KEYWORDS)
+
+
+def _is_open_loop_fact(fact: dict) -> bool:
+    fact_type = str(fact.get("type") or "")
+    if fact_type not in {"schedule_commitment", "relationship_commitment", "life_event_hint"}:
+        return False
+    if _is_conditional_fact(fact):
+        return False
+    metadata = fact.get("metadata") or {}
+    strength = str(metadata.get("commitmentStrength") or "").strip().lower()
+    flexibility = str(metadata.get("flexibility") or "").strip().lower()
+    text = f"{fact.get('title') or ''} {fact.get('summary') or ''}"
+    return (
+        strength in {"accepted", "planned"}
+        or flexibility == "soft"
+        or bool(metadata.get("targetDate"))
+        or bool(SOFT_PLAN_SIGNALS.search(text))
+    )
+
+
+def _open_loop_from_fact(fact: dict, *, day: dt.date) -> dict:
+    metadata = fact.get("metadata") or {}
+    time_hint = str(metadata.get("timeHint") or "").strip()
+    target_date = str(metadata.get("targetDate") or day.isoformat())[:10]
+    return {
+        "id": fact.get("id"),
+        "title": fact.get("title"),
+        "summary": fact.get("summary"),
+        "status": "pending",
+        "targetDate": target_date,
+        "timeHint": time_hint,
+        "timeRange": _soft_fact_time_range(fact),
+        "requiredOnce": True,
+        "sourceFactId": fact.get("id"),
+        "certainty": "planned" if str(fact.get("status") or "") in {"planned", "active"} else "tentative",
+        "whyToday": "来自聊天承诺，应该安排一次；若被硬日程阻断，需要说明改期而不是遗忘。",
+    }
+
+
+def _soft_fact_time_range(fact: dict) -> str:
+    start = _from_timestamp(fact.get("startsAt"))
+    end = _from_timestamp(fact.get("endsAt"))
+    if start and end:
+        return f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
+    if start:
+        return start.strftime("%H:%M")
+    metadata = fact.get("metadata") or {}
+    hint = str(metadata.get("timeHint") or "").lower()
+    if "morning" in hint or "上午" in hint:
+        return "09:30-12:00"
+    if "night" in hint or "evening" in hint or "晚上" in hint:
+        return "19:00-21:30"
+    if "afternoon" in hint or "下午" in hint:
+        return "14:00-17:30"
+    return ""
 
 
 def _hard_blocks_from_fact(fact: dict, *, day_start: dt.datetime, day_end: dt.datetime) -> list[dict]:
@@ -1166,7 +1235,13 @@ def _find_constraint_conflicts(*, hard_blocks: list[dict], conditional: list[dic
     return conflicts
 
 
-def _format_constraint_summary(hard_blocks: list[dict], conditional: list[dict], soft_hints: list[dict], conflicts: list[dict]) -> str:
+def _format_constraint_summary(
+    hard_blocks: list[dict],
+    conditional: list[dict],
+    soft_hints: list[dict],
+    conflicts: list[dict],
+    open_loops: list[dict] | None = None,
+) -> str:
     lines: list[str] = []
     if hard_blocks:
         lines.append("硬日程：")
@@ -1177,6 +1252,9 @@ def _format_constraint_summary(hard_blocks: list[dict], conditional: list[dict],
     if soft_hints:
         lines.append("软提示：")
         lines.extend(f"- {item.get('title')}: {item.get('summary')}" for item in soft_hints[:6])
+    if open_loops:
+        lines.append("待兑现事项：")
+        lines.extend(f"- {item.get('timeRange') or item.get('timeHint') or '择时'} {item.get('title')}: {item.get('whyToday')}" for item in open_loops[:6])
     if conflicts:
         lines.append("冲突处理：")
         lines.extend(f"- {item['message']}" for item in conflicts[:6])
